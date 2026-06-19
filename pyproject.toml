@@ -117,7 +117,17 @@ addopts = "--cov=anythink --cov-report=term-missing --cov-fail-under=80"
 
 [tool.coverage.run]
 source = ["anythink"]
-omit = ["*/ui/input.py"]
+omit = [
+    "*/ui/input.py",      # prompt_toolkit integration, not unit-testable
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    "\\.\\.\\.",          # abstract method stubs
+]
 
 [tool.bandit]
 targets = ["src/anythink"]

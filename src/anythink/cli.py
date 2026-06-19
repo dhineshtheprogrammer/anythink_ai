@@ -6,6 +6,7 @@ import typer
 from typing_extensions import Annotated
 
 from anythink import __version__
+from anythink.config.manager import ConfigManager
 
 app = typer.Typer(
     name="anythink",
@@ -40,8 +41,6 @@ def main(
         return
 
     # Placeholder until App orchestrator is implemented (Phase 5)
-    from anythink.config.manager import ConfigManager
-
     config_manager = ConfigManager()
     if not config_manager.is_configured():
         typer.echo("Anythink is not configured yet. Run `anythink setup` to get started.")
