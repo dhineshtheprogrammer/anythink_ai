@@ -274,3 +274,34 @@ class TestChatAppRun:
             code = await ChatApp(ctx, command_registry=registry).run()
         assert code == 0
         assert state.history == []
+
+    async def test_autosave_saves_session_after_chat(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        state = _make_state(text="World")
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hello", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+        sessions = ctx.session_manager.list_sessions()
+        assert len(sessions) == 1
+        assert len(sessions[0].messages) == 2
+
+    async def test_autosave_skipped_when_history_empty(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        state = _make_state()
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])):
+            await ChatApp(ctx, command_registry=registry).run()
+        assert ctx.session_manager.list_sessions() == []
+
+    async def test_autosave_disabled_by_config(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from dataclasses import replace
+        ctx.config = replace(ctx.config, session_autosave=False)
+        state = _make_state(text="World")
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hello", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+        assert ctx.session_manager.list_sessions() == []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 
 from rich.text import Text
@@ -12,6 +13,7 @@ from anythink.commands.registry import CommandRegistry
 from anythink.config.models import ModelAlias
 from anythink.exceptions import AnythinkError
 from anythink.providers.base import BaseProvider, ChatMessage, TokenUsage
+from anythink.session.models import Session
 from anythink.ui.banner import print_banner
 from anythink.ui.input import make_prompt_session
 from anythink.ui.renderer import StreamRenderer
@@ -27,6 +29,8 @@ class ChatState:
     context_window: int
     history: list[ChatMessage] = field(default_factory=list)
     total_tokens_used: int = 0
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    session_name: str = ""
 
 
 class ChatApp:
@@ -113,6 +117,17 @@ class ChatApp:
                 state.total_tokens_used = usage.total_tokens
 
             ctx.console.print()
+
+        # Autosave when configured and conversation is non-empty
+        if ctx.config.session_autosave and state.history:
+            session = Session(
+                id=state.session_id,
+                provider=state.provider.name,
+                model_id=state.model_id,
+                messages=list(state.history),
+                name=state.session_name,
+            )
+            ctx.session_manager.save(session)
 
         return 0
 

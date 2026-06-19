@@ -13,6 +13,7 @@ from anythink.config.personas import PersonaManager
 from anythink.config.schema import AppConfig
 from anythink.keys.manager import KeyManager
 from anythink.providers.registry import ProviderRegistry
+from anythink.session.manager import SessionManager
 from anythink.ui.console import make_console
 from anythink.ui.theme import Theme, get_theme
 
@@ -34,6 +35,7 @@ class AppContext:
     provider_registry: ProviderRegistry
     model_registry: ModelRegistry
     persona_manager: PersonaManager
+    session_manager: SessionManager
 
     @classmethod
     def create(
@@ -60,4 +62,5 @@ class AppContext:
             provider_registry=ProviderRegistry(),
             model_registry=ModelRegistry(path=resolved.models_file),
             persona_manager=PersonaManager(path=resolved.personas_file),
+            session_manager=SessionManager(sessions_dir=resolved.sessions_dir),
         )

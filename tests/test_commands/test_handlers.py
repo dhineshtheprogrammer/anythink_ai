@@ -212,6 +212,121 @@ class TestPersonaCommand:
         assert "pirate" in system_msgs[0].content.lower()  # type: ignore[operator]
 
 
+class TestSessionCommand:
+    async def test_session_no_args_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_session_unknown_sub_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session bloop", ctx, state)
+        assert result.error is True
+
+    async def test_session_list_empty(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session list", ctx, state)
+        assert "No saved sessions" in (result.message or "")
+
+    async def test_session_save_no_name(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.history = [ChatMessage(role="user", content="hi")]
+        result = await registry.dispatch("/session save", ctx, state)
+        assert result.error is False
+        assert len(ctx.session_manager.list_sessions()) == 1
+
+    async def test_session_save_with_name(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.history = [ChatMessage(role="user", content="hi")]
+        await registry.dispatch("/session save my-chat", ctx, state)
+        sessions = ctx.session_manager.list_sessions()
+        assert sessions[0].name == "my-chat"
+
+    async def test_session_list_shows_saved_sessions(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.history = [ChatMessage(role="user", content="hi")]
+        await registry.dispatch("/session save chat1", ctx, state)
+        result = await registry.dispatch("/session list", ctx, state)
+        assert "chat1" in (result.message or "")
+
+    async def test_session_load_unknown_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session load nobody", ctx, state)
+        assert result.error is True
+
+    async def test_session_load_no_arg_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session load", ctx, state)
+        assert result.error is True
+
+    async def test_session_load_restores_history(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.history = [ChatMessage(role="user", content="loaded msg")]
+        await registry.dispatch("/session save myload", ctx, state)
+        state.history = []
+        result = await registry.dispatch("/session load myload", ctx, state)
+        assert result.error is False
+        assert len(state.history) == 1
+        assert state.history[0].content == "loaded msg"
+
+    async def test_session_delete_unknown_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session delete nobody", ctx, state)
+        assert result.error is True
+
+    async def test_session_delete_no_arg_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session delete", ctx, state)
+        assert result.error is True
+
+    async def test_session_delete_removes_session(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.history = [ChatMessage(role="user", content="bye")]
+        await registry.dispatch("/session save todele", ctx, state)
+        await registry.dispatch("/session delete todele", ctx, state)
+        assert ctx.session_manager.list_sessions() == []
+
+    async def test_session_rename_no_args_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session rename", ctx, state)
+        assert result.error is True
+
+    async def test_session_rename_one_arg_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session rename oldname", ctx, state)
+        assert result.error is True
+
+    async def test_session_rename_unknown_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/session rename nobody newname", ctx, state)
+        assert result.error is True
+
+    async def test_session_rename_updates_name(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.history = [ChatMessage(role="user", content="hello")]
+        await registry.dispatch("/session save oldname", ctx, state)
+        await registry.dispatch("/session rename oldname newname", ctx, state)
+        sessions = ctx.session_manager.list_sessions()
+        assert sessions[0].name == "newname"
+
+
 class TestExitCommand:
     async def test_exit_sets_should_exit(
         self, registry: CommandRegistry, ctx: AppContext, state: ChatState
