@@ -8,6 +8,7 @@ from rich.text import Text
 
 from anythink import __version__
 from anythink.app.context import AppContext
+from anythink.commands.registry import CommandRegistry
 from anythink.config.models import ModelAlias
 from anythink.exceptions import AnythinkError
 from anythink.providers.base import BaseProvider, ChatMessage, TokenUsage
@@ -31,8 +32,13 @@ class ChatState:
 class ChatApp:
     """Interactive chat loop: banner → prompt → stream → repeat."""
 
-    def __init__(self, ctx: AppContext) -> None:
+    def __init__(
+        self,
+        ctx: AppContext,
+        command_registry: CommandRegistry | None = None,
+    ) -> None:
         self.ctx = ctx
+        self._registry = command_registry or CommandRegistry.from_entry_points()
 
     async def run(self) -> int:
         """Run the interactive chat loop. Returns an exit code (0 = normal exit)."""
@@ -44,7 +50,7 @@ class ChatApp:
 
         renderer = StreamRenderer(console=ctx.console, theme=ctx.theme)
         status_bar = ContextStatusBar(theme=ctx.theme, max_tokens=state.context_window)
-        session = make_prompt_session()
+        session = make_prompt_session(slash_commands=self._registry.names())
 
         print_banner(ctx.console, ctx.theme, __version__)
         ctx.console.print(
@@ -70,7 +76,19 @@ class ChatApp:
             stripped = user_input.strip()
             if not stripped:
                 continue
-            if stripped.lower() in ("/exit", "/quit", "exit", "quit"):
+
+            # Slash commands
+            if stripped.startswith("/"):
+                result = await self._registry.dispatch(stripped, ctx, state)
+                if result.message:
+                    style = ctx.theme.error if result.error else ctx.theme.secondary
+                    ctx.console.print(Text(result.message, style=style))
+                if result.should_exit:
+                    break
+                continue
+
+            # Legacy bare "exit" / "quit" shortcuts
+            if stripped.lower() in ("exit", "quit"):
                 ctx.console.print(Text("Goodbye!", style=ctx.theme.primary))
                 break
 

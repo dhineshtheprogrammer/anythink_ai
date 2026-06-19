@@ -10,10 +10,19 @@ import pytest
 
 from anythink.app.chat import ChatApp, ChatState
 from anythink.app.context import AppContext
+from anythink.commands.handlers import register_commands
+from anythink.commands.registry import CommandRegistry
 from anythink.config.manager import Paths
 from anythink.config.models import ModelAlias, ModelRegistry
 from anythink.exceptions import ProviderUnavailableError
 from anythink.providers.base import ChatMessage, StreamChunk, TokenUsage
+
+
+@pytest.fixture()
+def registry() -> CommandRegistry:
+    r = CommandRegistry()
+    register_commands(r)
+    return r
 
 
 class MockSession:
@@ -235,3 +244,33 @@ class TestChatAppRun:
             await ChatApp(ctx).run()
         output = buf.getvalue()  # type: ignore[attr-defined]
         assert "anythink" in output.lower() or "think" in output.lower()
+
+    async def test_run_slash_command_continues_without_sending_to_ai(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        state = _make_state()
+        # /help is a non-exit command; the loop should continue and then /exit breaks it
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/help", "/exit"])):
+            code = await ChatApp(ctx, command_registry=registry).run()
+        assert code == 0
+        assert state.history == []  # slash commands never added to history
+
+    async def test_run_unknown_slash_command_shows_error(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        state = _make_state()
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/nope", "/exit"])):
+            code = await ChatApp(ctx, command_registry=registry).run()
+        assert code == 0
+
+    async def test_run_legacy_bare_exit_breaks_loop(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        state = _make_state()
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["exit"])):
+            code = await ChatApp(ctx, command_registry=registry).run()
+        assert code == 0
+        assert state.history == []
