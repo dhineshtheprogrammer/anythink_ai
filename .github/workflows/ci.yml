@@ -12,15 +12,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+
       - name: Install dev dependencies
         run: pip install -e ".[dev]"
+
       - name: Lint (ruff)
         run: ruff check src/
+
       - name: Format check (black)
         run: black --check src/ tests/
+
       - name: Type check (mypy)
         run: mypy src/anythink
 
@@ -29,11 +35,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install bandit
-        run: pip install bandit
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
       - name: Security scan (bandit)
         run: bandit -r src/anythink -c pyproject.toml
 
@@ -41,35 +51,57 @@ jobs:
     name: Test (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.11", "3.12", "3.13"]
     env:
       PYTHON_KEYRING_BACKEND: keyrings.alt.file.PlaintextKeyring
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+
       - name: Install with dev dependencies
         run: pip install -e ".[dev]"
-      - name: Run tests
-        run: pytest tests/ -v
+
+      - name: Run tests with coverage
+        run: pytest tests/ -v --cov-report=xml
+
+      - name: Upload coverage report
+        if: matrix.python-version == '3.11'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+          retention-days: 7
 
   build:
-    name: Build Package
+    name: Build & Verify Package
     runs-on: ubuntu-latest
-    needs: [lint-typecheck, test]
+    needs: [lint-typecheck, security, test]
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+
       - name: Install build tools
-        run: pip install build
+        run: pip install build twine
+
       - name: Build distribution
         run: python -m build
-      - name: Upload artifacts
+
+      - name: Verify distribution metadata
+        run: twine check dist/*
+
+      - name: Upload dist artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
+          retention-days: 7
