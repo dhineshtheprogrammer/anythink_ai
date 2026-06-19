@@ -12,7 +12,8 @@ from anythink.app.context import AppContext
 from anythink.commands.registry import CommandRegistry
 from anythink.config.models import ModelAlias
 from anythink.exceptions import AnythinkError
-from anythink.providers.base import BaseProvider, ChatMessage, TokenUsage
+from anythink.files.reader import FileAttachment, ImageAttachment, TextAttachment
+from anythink.providers.base import BaseProvider, ChatMessage, ContentPart, ImagePart, TextPart, TokenUsage
 from anythink.session.models import Session
 from anythink.ui.banner import print_banner
 from anythink.ui.input import make_prompt_session
@@ -31,6 +32,7 @@ class ChatState:
     total_tokens_used: int = 0
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     session_name: str = ""
+    pending_attachments: list[FileAttachment] = field(default_factory=list)
 
 
 class ChatApp:
@@ -96,7 +98,19 @@ class ChatApp:
                 ctx.console.print(Text("Goodbye!", style=ctx.theme.primary))
                 break
 
-            user_msg = ChatMessage(role="user", content=stripped)
+            if state.pending_attachments:
+                parts: list[ContentPart] = []
+                for att in state.pending_attachments:
+                    if isinstance(att, TextAttachment):
+                        parts.append(TextPart(f"[File: {att.filename}]\n{att.content}"))
+                    elif isinstance(att, ImageAttachment):
+                        parts.append(att.image_part)
+                if stripped:
+                    parts.append(TextPart(stripped))
+                user_msg = ChatMessage(role="user", content=parts)
+                state.pending_attachments.clear()
+            else:
+                user_msg = ChatMessage(role="user", content=stripped)
             state.history.append(user_msg)
 
             ctx.console.print(Text("\nAssistant: ", style=ctx.theme.accent))

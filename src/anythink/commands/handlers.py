@@ -5,7 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from anythink.commands.base import CommandResult, SlashCommand
-from anythink.exceptions import SessionError
+from anythink.exceptions import FileError, SessionError
+from anythink.files.reader import ImageAttachment, TextAttachment, read_image_file, read_text_file
 from anythink.providers.base import ChatMessage
 from anythink.session.models import Session
 
@@ -24,6 +25,9 @@ def register_commands(registry: CommandRegistry) -> None:
     registry.register(SlashCommand("model", "Show the active provider and model", _model, "/model"))
     registry.register(SlashCommand("persona", "Set or clear the active persona", _persona, "/persona <name> | clear"))
     registry.register(SlashCommand("session", "Manage saved sessions", _session, "/session <save|load|list|delete|rename>"))
+    registry.register(SlashCommand("file", "Attach a text file to the next message", _file, "/file <path>"))
+    registry.register(SlashCommand("image", "Attach an image to the next message", _image, "/image <path>"))
+    registry.register(SlashCommand("files", "List pending file attachments", _files, "/files"))
     registry.register(SlashCommand("exit", "Exit Anythink", _exit_cmd, "/exit"))
     registry.register(SlashCommand("quit", "Exit Anythink", _exit_cmd, "/quit"))
 
@@ -204,6 +208,57 @@ async def _session(
         error=True,
         message=f"Unknown sub-command '{sub}'. Use: save, load, list, delete, rename",
     )
+
+
+async def _file(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    if not args:
+        return CommandResult(error=True, message="Usage: /file <path>")
+    try:
+        att = read_text_file(args.strip())
+    except FileError as exc:
+        return CommandResult(error=True, message=exc.user_message)
+    state.pending_attachments.append(att)
+    size_kb = att.size_bytes / 1024
+    return CommandResult(message=f"Attached: {att.filename} ({size_kb:.1f} KB, text)")
+
+
+async def _image(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    if not args:
+        return CommandResult(error=True, message="Usage: /image <path>")
+    try:
+        att = read_image_file(args.strip())
+    except FileError as exc:
+        return CommandResult(error=True, message=exc.user_message)
+    state.pending_attachments.append(att)
+    size_kb = att.size_bytes / 1024
+    return CommandResult(message=f"Attached: {att.filename} ({size_kb:.1f} KB, {att.image_part.mime_type})")
+
+
+async def _files(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    if not state.pending_attachments:
+        return CommandResult(message="No pending attachments.")
+    lines = ["Pending attachments:"]
+    for att in state.pending_attachments:
+        if isinstance(att, TextAttachment):
+            lines.append(f"  {att.filename} ({att.size_bytes / 1024:.1f} KB, text)")
+        elif isinstance(att, ImageAttachment):
+            lines.append(f"  {att.filename} ({att.size_bytes / 1024:.1f} KB, {att.image_part.mime_type})")
+    return CommandResult(message="\n".join(lines))
 
 
 async def _exit_cmd(

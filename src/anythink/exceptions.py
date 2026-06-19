@@ -51,3 +51,7 @@ class PluginError(AnythinkError):
 
 class SearchError(AnythinkError):
     """Raised when a web search operation fails."""
+
+
+class FileError(AnythinkError):
+    """Raised when a file cannot be read, is too large, or has an unsupported format."""

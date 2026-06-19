@@ -327,6 +327,135 @@ class TestSessionCommand:
         assert sessions[0].name == "newname"
 
 
+class TestFileCommand:
+    async def test_file_no_arg_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/file", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_file_attaches_text_file(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState, tmp_path: pytest.TempPathFactory
+    ) -> None:
+        from pathlib import Path
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w", encoding="utf-8") as fh:
+            fh.write("print('hello')")
+            fpath = fh.name
+        result = await registry.dispatch(f"/file {fpath}", ctx, state)
+        assert result.error is False
+        assert len(state.pending_attachments) == 1
+        from anythink.files.reader import TextAttachment
+        assert isinstance(state.pending_attachments[0], TextAttachment)
+
+    async def test_file_nonexistent_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/file /tmp/does_not_exist_anythink.py", ctx, state)
+        assert result.error is True
+        assert "not found" in (result.message or "").lower()
+
+    async def test_file_image_extension_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fh:
+            fh.write(b"\x89PNG")
+            fpath = fh.name
+        result = await registry.dispatch(f"/file {fpath}", ctx, state)
+        assert result.error is True
+        assert "/image" in (result.message or "")
+
+
+class TestImageCommand:
+    async def test_image_no_arg_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/image", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_image_attaches_image_file(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n")
+            fpath = fh.name
+        result = await registry.dispatch(f"/image {fpath}", ctx, state)
+        assert result.error is False
+        assert len(state.pending_attachments) == 1
+        from anythink.files.reader import ImageAttachment
+        assert isinstance(state.pending_attachments[0], ImageAttachment)
+
+    async def test_image_nonexistent_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/image /tmp/no_such_image_anythink.png", ctx, state)
+        assert result.error is True
+        assert "not found" in (result.message or "").lower()
+
+    async def test_image_unsupported_ext_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as fh:
+            fh.write(b"BM")
+            fpath = fh.name
+        result = await registry.dispatch(f"/image {fpath}", ctx, state)
+        assert result.error is True
+        assert "Unsupported" in (result.message or "")
+
+
+class TestFilesCommand:
+    async def test_files_empty_when_no_attachments(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/files", ctx, state)
+        assert result.error is False
+        assert "No pending" in (result.message or "")
+
+    async def test_files_shows_text_attachment(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import TextAttachment
+        state.pending_attachments.append(
+            TextAttachment(path=Path("/tmp/script.py"), filename="script.py",
+                           content="print()", size_bytes=7)
+        )
+        result = await registry.dispatch("/files", ctx, state)
+        assert "script.py" in (result.message or "")
+
+    async def test_files_shows_image_attachment(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import ImageAttachment
+        from anythink.providers.base import ImagePart
+        state.pending_attachments.append(
+            ImageAttachment(path=Path("/tmp/img.png"), filename="img.png",
+                            image_part=ImagePart(b"\x89PNG", "image/png"), size_bytes=4)
+        )
+        result = await registry.dispatch("/files", ctx, state)
+        assert "img.png" in (result.message or "")
+        assert "image/png" in (result.message or "")
+
+    async def test_files_shows_count_of_multiple(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import TextAttachment
+        state.pending_attachments.extend([
+            TextAttachment(path=Path("/a.py"), filename="a.py", content="", size_bytes=0),
+            TextAttachment(path=Path("/b.txt"), filename="b.txt", content="", size_bytes=0),
+        ])
+        result = await registry.dispatch("/files", ctx, state)
+        assert "a.py" in (result.message or "")
+        assert "b.txt" in (result.message or "")
+
+
 class TestExitCommand:
     async def test_exit_sets_should_exit(
         self, registry: CommandRegistry, ctx: AppContext, state: ChatState

@@ -305,3 +305,113 @@ class TestChatAppRun:
                 patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hello", "/exit"])):
             await ChatApp(ctx, command_registry=registry).run()
         assert ctx.session_manager.list_sessions() == []
+
+
+# ── multimodal / pending attachments ─────────────────────────────────────────
+
+
+class TestMultimodalMessages:
+    async def test_run_sends_multimodal_message_with_image(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import ImageAttachment
+        from anythink.providers.base import ImagePart
+
+        state = _make_state(text="response")
+        state.pending_attachments = [
+            ImageAttachment(
+                path=Path("/fake.png"), filename="fake.png",
+                image_part=ImagePart(b"\x89PNG", "image/png"), size_bytes=4,
+            )
+        ]
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["describe this", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, list)
+        assert any(isinstance(p, ImagePart) for p in user_msg.content)
+
+    async def test_run_includes_text_file_content_in_message(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import TextAttachment
+        from anythink.providers.base import TextPart
+
+        state = _make_state(text="response")
+        state.pending_attachments = [
+            TextAttachment(
+                path=Path("/fake.py"), filename="fake.py",
+                content="print('hello')", size_bytes=14,
+            )
+        ]
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["what does this do?", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, list)
+        text_parts = [p for p in user_msg.content if isinstance(p, TextPart)]
+        assert any("fake.py" in p.text for p in text_parts)
+        assert any("print('hello')" in p.text for p in text_parts)
+
+    async def test_run_clears_pending_attachments_after_send(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import TextAttachment
+
+        state = _make_state(text="response")
+        state.pending_attachments = [
+            TextAttachment(
+                path=Path("/fake.txt"), filename="fake.txt",
+                content="hello", size_bytes=5,
+            )
+        ]
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["hi", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        assert state.pending_attachments == []
+
+    async def test_run_includes_user_text_with_attachment(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from pathlib import Path
+        from anythink.files.reader import TextAttachment
+        from anythink.providers.base import TextPart
+
+        state = _make_state(text="response")
+        state.pending_attachments = [
+            TextAttachment(
+                path=Path("/readme.txt"), filename="readme.txt",
+                content="docs here", size_bytes=9,
+            )
+        ]
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["summarize it", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, list)
+        text_parts = [p for p in user_msg.content if isinstance(p, TextPart)]
+        assert any("summarize it" in p.text for p in text_parts)
+
+    async def test_run_no_attachments_sends_plain_string(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        state = _make_state(text="response")
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["plain message", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, str)
+        assert user_msg.content == "plain message"
