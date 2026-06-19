@@ -12,6 +12,7 @@ from anythink.config.models import ModelRegistry
 from anythink.config.personas import PersonaManager
 from anythink.config.schema import AppConfig
 from anythink.keys.manager import KeyManager
+from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
 from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
@@ -38,6 +39,7 @@ class AppContext:
     persona_manager: PersonaManager
     session_manager: SessionManager
     search_registry: SearchRegistry
+    plugin_manager: PluginManager
 
     @classmethod
     def create(
@@ -69,4 +71,5 @@ class AppContext:
             search_registry=SearchRegistry.from_entry_points(
                 api_keys={"serpapi": key_manager.get_key("serpapi")}
             ),
+            plugin_manager=PluginManager(),
         )

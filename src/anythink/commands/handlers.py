@@ -29,6 +29,7 @@ def register_commands(registry: CommandRegistry) -> None:
     registry.register(SlashCommand("image", "Attach an image to the next message", _image, "/image <path>"))
     registry.register(SlashCommand("files", "List pending file attachments", _files, "/files"))
     registry.register(SlashCommand("search", "Enable/disable web search or run a one-off search", _search, "/search on|off|<query>"))
+    registry.register(SlashCommand("plugins", "List or manage installed plugins", _plugins, "/plugins [list|info|install|remove] [name]"))
     registry.register(SlashCommand("exit", "Exit Anythink", _exit_cmd, "/exit"))
     registry.register(SlashCommand("quit", "Exit Anythink", _exit_cmd, "/quit"))
 
@@ -260,6 +261,65 @@ async def _files(
         elif isinstance(att, ImageAttachment):
             lines.append(f"  {att.filename} ({att.size_bytes / 1024:.1f} KB, {att.image_part.mime_type})")
     return CommandResult(message="\n".join(lines))
+
+
+async def _plugins(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    parts = args.split(None, 1) if args else []
+    sub = parts[0].lower() if parts else "list"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub in ("", "list"):
+        plugins = ctx.plugin_manager.list_plugins()
+        if not plugins:
+            return CommandResult(message="No plugins installed.")
+        lines = ["Installed plugins:"]
+        for p in plugins:
+            desc = f" — {p.description}" if p.description else ""
+            lines.append(f"  {p.name} {p.version}{desc}")
+        return CommandResult(message="\n".join(lines))
+
+    if sub == "info":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /plugins info <name>")
+        p = ctx.plugin_manager.get_plugin(rest)
+        if p is None:
+            return CommandResult(error=True, message=f"Plugin '{rest}' not found.")
+        lines = [
+            f"Name:        {p.name}",
+            f"Version:     {p.version}",
+            f"Description: {p.description}",
+            f"Author:      {p.author}",
+            f"Groups:      {', '.join(p.entry_point_groups)}",
+        ]
+        if p.homepage:
+            lines.append(f"Homepage:    {p.homepage}")
+        return CommandResult(message="\n".join(lines))
+
+    if sub == "install":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /plugins install <package>")
+        ok, output = ctx.plugin_manager.install(rest)
+        if ok:
+            return CommandResult(message=f"Installed '{rest}'. Restart Anythink to load it.")
+        return CommandResult(error=True, message=f"Installation failed:\n{output[:500]}")
+
+    if sub == "remove":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /plugins remove <package>")
+        ok, output = ctx.plugin_manager.remove(rest)
+        if ok:
+            return CommandResult(message=f"Removed '{rest}'. Restart Anythink to apply changes.")
+        return CommandResult(error=True, message=f"Removal failed:\n{output[:500]}")
+
+    return CommandResult(
+        error=True,
+        message=f"Unknown sub-command '{sub}'. Use: list, info, install, remove",
+    )
 
 
 async def _search(

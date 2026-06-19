@@ -21,9 +21,11 @@ app = typer.Typer(
 
 keys_app = typer.Typer(name="keys", help="Manage API keys in the OS keychain.")
 model_app = typer.Typer(name="model", help="Manage model aliases.")
+plugins_app = typer.Typer(name="plugins", help="Manage Anythink plugins.")
 
 app.add_typer(keys_app, name="keys")
 app.add_typer(model_app, name="model")
+app.add_typer(plugins_app, name="plugins")
 
 
 def _version_callback(value: bool) -> None:
@@ -116,3 +118,68 @@ def model_add() -> None:
 def model_remove(alias: str = typer.Argument(..., help="Alias name to remove.")) -> None:
     """Remove a model alias."""
     typer.echo(f"Removing alias {alias}... (coming in Phase 2)")
+
+
+# ── plugins sub-commands ──────────────────────────────────────────────────────
+
+@plugins_app.command("list")
+def plugins_list() -> None:
+    """List all installed Anythink plugins."""
+    from anythink.plugins.manager import PluginManager
+
+    pm = PluginManager()
+    plugins = pm.list_plugins()
+    if not plugins:
+        typer.echo("No plugins installed.")
+        return
+    for p in plugins:
+        desc = f" — {p.description}" if p.description else ""
+        typer.echo(f"{p.name} {p.version}{desc}")
+
+
+@plugins_app.command("info")
+def plugins_info(package: str = typer.Argument(..., help="Plugin package name.")) -> None:
+    """Show details about an installed plugin."""
+    from anythink.plugins.manager import PluginManager
+
+    pm = PluginManager()
+    p = pm.get_plugin(package)
+    if p is None:
+        typer.echo(f"Plugin '{package}' not found.", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"Name:        {p.name}")
+    typer.echo(f"Version:     {p.version}")
+    typer.echo(f"Description: {p.description}")
+    typer.echo(f"Author:      {p.author}")
+    typer.echo(f"Groups:      {', '.join(p.entry_point_groups)}")
+    if p.homepage:
+        typer.echo(f"Homepage:    {p.homepage}")
+
+
+@plugins_app.command("install")
+def plugins_install(package: str = typer.Argument(..., help="PyPI package name to install.")) -> None:
+    """Install a plugin package from PyPI."""
+    from anythink.plugins.manager import PluginManager
+
+    pm = PluginManager()
+    typer.echo(f"Installing '{package}'...")
+    ok, output = pm.install(package)
+    if ok:
+        typer.echo(f"Installed '{package}'. Restart anythink to load it.")
+    else:
+        typer.echo(f"Installation failed:\n{output[:500]}", err=True)
+        raise typer.Exit(1)
+
+
+@plugins_app.command("remove")
+def plugins_remove(package: str = typer.Argument(..., help="Plugin package name to remove.")) -> None:
+    """Remove an installed plugin package."""
+    from anythink.plugins.manager import PluginManager
+
+    pm = PluginManager()
+    ok, output = pm.remove(package)
+    if ok:
+        typer.echo(f"Removed '{package}'. Restart anythink to apply changes.")
+    else:
+        typer.echo(f"Removal failed:\n{output[:500]}", err=True)
+        raise typer.Exit(1)
