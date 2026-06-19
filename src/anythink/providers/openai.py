@@ -82,7 +82,6 @@ class OpenAIProvider(BaseProvider):
             "messages": self._build_messages(messages),
             "temperature": temperature,
             "stream": True,
-            "stream_options": {"include_usage": True},
         }
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
@@ -95,7 +94,7 @@ class OpenAIProvider(BaseProvider):
                 delta_text = (choice.delta.content or "") if choice else ""
                 finish_reason = choice.finish_reason if choice else None
                 usage: TokenUsage | None = None
-                if chunk.usage:
+                if getattr(chunk, "usage", None):
                     usage = TokenUsage(
                         prompt_tokens=chunk.usage.prompt_tokens,
                         completion_tokens=chunk.usage.completion_tokens,
@@ -110,6 +109,12 @@ class OpenAIProvider(BaseProvider):
             raise ModelNotFoundError(str(e), provider=self.name) from e
         except (openai.APIConnectionError, httpx.ConnectError) as e:
             raise ProviderUnavailableError(str(e), provider=self.name) from e
+        except openai.APIError as e:
+            raise ProviderUnavailableError(
+                str(e),
+                provider=self.name,
+                user_message=f"OpenAI API error: {e}",
+            ) from e
 
     async def list_models(self) -> list[ModelInfo]:
         try:
