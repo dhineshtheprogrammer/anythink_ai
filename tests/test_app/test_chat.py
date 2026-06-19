@@ -415,3 +415,151 @@ class TestMultimodalMessages:
         user_msg = state.history[0]
         assert isinstance(user_msg.content, str)
         assert user_msg.content == "plain message"
+
+
+# ── web search integration ────────────────────────────────────────────────────
+
+
+class _MockSearchBackend:
+    """Minimal search backend for chat-loop tests."""
+
+    name = "mock"
+    display_name = "Mock"
+
+    def __init__(
+        self,
+        results: list[Any] | None = None,
+        *,
+        raises: bool = False,
+    ) -> None:
+        self._results = results or []
+        self._raises = raises
+
+    def is_available(self) -> bool:
+        return True
+
+    async def search(self, query: str, max_results: int = 5) -> list[Any]:
+        from anythink.exceptions import SearchError
+
+        if self._raises:
+            raise SearchError("search failed", user_message="search failed")
+        return self._results
+
+
+def _make_search_ctx(
+    ctx: AppContext,
+    results: list[Any] | None = None,
+    *,
+    raises: bool = False,
+) -> AppContext:
+    """Wire a mock search backend into *ctx*."""
+    from anythink.search.registry import SearchRegistry
+
+    r = SearchRegistry()
+    r.register(_MockSearchBackend(results=results, raises=raises))
+    ctx.search_registry = r
+    return ctx
+
+
+class TestSearchIntegration:
+    async def test_search_enabled_injects_results_in_message(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from anythink.providers.base import TextPart
+        from anythink.search.base import SearchResult
+
+        results = [SearchResult(title="Python", url="https://python.org", snippet="A language")]
+        _make_search_ctx(ctx, results=results)
+
+        state = _make_state(text="response")
+        state.search_enabled = True
+
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["what is python?", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, list)
+        assert any(
+            isinstance(p, TextPart) and "[Web Search:" in p.text
+            for p in user_msg.content
+        )
+
+    async def test_search_enabled_user_text_also_in_message(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from anythink.providers.base import TextPart
+        from anythink.search.base import SearchResult
+
+        results = [SearchResult(title="T", url="https://t.com", snippet="S")]
+        _make_search_ctx(ctx, results=results)
+
+        state = _make_state(text="response")
+        state.search_enabled = True
+
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["my question", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, list)
+        assert any(
+            isinstance(p, TextPart) and "my question" in p.text
+            for p in user_msg.content
+        )
+
+    async def test_search_disabled_sends_plain_string(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from anythink.search.base import SearchResult
+
+        results = [SearchResult(title="T", url="https://t.com", snippet="S")]
+        _make_search_ctx(ctx, results=results)
+
+        state = _make_state(text="response")
+        state.search_enabled = False  # explicitly off
+
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["plain", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, str)
+
+    async def test_search_error_continues_with_plain_message(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        _make_search_ctx(ctx, raises=True)
+
+        state = _make_state(text="response")
+        state.search_enabled = True
+
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["hi", "/exit"])):
+            code = await ChatApp(ctx, command_registry=registry).run()
+
+        assert code == 0
+        # Message still sent despite search failure
+        assert len(state.history) >= 1
+
+    async def test_search_no_backend_sends_plain_message(
+        self, ctx: AppContext, registry: CommandRegistry
+    ) -> None:
+        from anythink.search.registry import SearchRegistry
+
+        ctx.search_registry = SearchRegistry()  # empty — no backends
+
+        state = _make_state(text="response")
+        state.search_enabled = True
+
+        with patch.object(ChatApp, "_resolve_state", return_value=state), \
+                patch("anythink.app.chat.make_prompt_session",
+                      return_value=MockSession(["hi", "/exit"])):
+            await ChatApp(ctx, command_registry=registry).run()
+
+        user_msg = state.history[0]
+        assert isinstance(user_msg.content, str)

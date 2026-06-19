@@ -37,7 +37,7 @@ def state(ctx: AppContext) -> ChatState:
 
 class TestRegisterCommands:
     def test_all_builtin_commands_registered(self, registry: CommandRegistry) -> None:
-        expected = {"help", "clear", "history", "tokens", "model", "persona", "exit", "quit"}
+        expected = {"help", "clear", "history", "tokens", "model", "persona", "exit", "quit", "search", "plugins"}
         assert expected.issubset(set(registry.names()))
 
 
@@ -454,6 +454,236 @@ class TestFilesCommand:
         result = await registry.dispatch("/files", ctx, state)
         assert "a.py" in (result.message or "")
         assert "b.txt" in (result.message or "")
+
+
+class TestSearchCommand:
+    def _mock_ctx_with_backend(
+        self,
+        ctx: AppContext,
+        results: list | None = None,
+        *,
+        raises: bool = False,
+        available: bool = True,
+    ) -> AppContext:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from anythink.exceptions import SearchError
+        from anythink.search.registry import SearchRegistry
+
+        mock_backend = MagicMock()
+        mock_backend.name = "mock"
+        mock_backend.is_available = MagicMock(return_value=available)
+
+        if raises:
+            mock_backend.search = AsyncMock(
+                side_effect=SearchError("boom", user_message="search failed")
+            )
+        else:
+            mock_backend.search = AsyncMock(return_value=results or [])
+
+        r = SearchRegistry()
+        r.register(mock_backend)
+        ctx.search_registry = r
+        return ctx
+
+    async def test_on_enables_search(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        assert state.search_enabled is False
+        result = await registry.dispatch("/search on", ctx, state)
+        assert state.search_enabled is True
+        assert result.error is False
+        assert "enabled" in (result.message or "").lower()
+
+    async def test_off_disables_search(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.search_enabled = True
+        result = await registry.dispatch("/search off", ctx, state)
+        assert state.search_enabled is False
+        assert result.error is False
+        assert "disabled" in (result.message or "").lower()
+
+    async def test_no_args_returns_usage_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_query_shows_results(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.search.base import SearchResult
+
+        results = [SearchResult(title="Python.org", url="https://python.org", snippet="Language")]
+        self._mock_ctx_with_backend(ctx, results=results)
+
+        result = await registry.dispatch("/search python", ctx, state)
+
+        assert result.error is False
+        assert "Python.org" in (result.message or "")
+        assert "https://python.org" in (result.message or "")
+
+    async def test_query_shows_no_results_message(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_ctx_with_backend(ctx, results=[])
+        result = await registry.dispatch("/search obscure thing", ctx, state)
+        assert result.error is False
+        assert "No results" in (result.message or "")
+
+    async def test_no_backend_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.search.registry import SearchRegistry
+
+        ctx.search_registry = SearchRegistry()  # empty
+        result = await registry.dispatch("/search python", ctx, state)
+        assert result.error is True
+        assert "No search backend" in (result.message or "")
+
+    async def test_search_error_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_ctx_with_backend(ctx, raises=True)
+        result = await registry.dispatch("/search python", ctx, state)
+        assert result.error is True
+        assert "search failed" in (result.message or "").lower()
+
+
+class TestPluginsCommand:
+    def _mock_pm(
+        self,
+        ctx: AppContext,
+        plugins: list | None = None,
+        *,
+        install_ok: bool = True,
+        remove_ok: bool = True,
+    ) -> AppContext:
+        from unittest.mock import MagicMock
+
+        from anythink.plugins.models import PluginInfo
+
+        pm = MagicMock()
+        pm.list_plugins = MagicMock(return_value=plugins or [])
+        pm.get_plugin = MagicMock(
+            side_effect=lambda name: next(
+                (p for p in (plugins or []) if p.name.lower() == name.lower()), None
+            )
+        )
+        pm.install = MagicMock(return_value=(install_ok, "ok" if install_ok else "fail"))
+        pm.remove = MagicMock(return_value=(remove_ok, "ok" if remove_ok else "fail"))
+        ctx.plugin_manager = pm
+        return ctx
+
+    async def test_no_args_shows_plugin_list(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.plugins.models import PluginInfo
+
+        plugins = [PluginInfo(name="mypkg", version="1.0", description="A plugin", author="")]
+        self._mock_pm(ctx, plugins=plugins)
+        result = await registry.dispatch("/plugins", ctx, state)
+        assert result.error is False
+        assert "mypkg" in (result.message or "")
+
+    async def test_list_subcommand_shows_plugins(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.plugins.models import PluginInfo
+
+        plugins = [PluginInfo(name="anythink-groq", version="2.0", description="Groq", author="")]
+        self._mock_pm(ctx, plugins=plugins)
+        result = await registry.dispatch("/plugins list", ctx, state)
+        assert "anythink-groq" in (result.message or "")
+
+    async def test_list_empty_shows_no_plugins_message(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx, plugins=[])
+        result = await registry.dispatch("/plugins", ctx, state)
+        assert result.error is False
+        assert "No plugins" in (result.message or "")
+
+    async def test_info_shows_plugin_details(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.plugins.models import PluginInfo
+
+        plugins = [PluginInfo(
+            name="anythink-groq", version="1.5.0", description="Groq provider",
+            author="Dev", entry_point_groups=["anythink.providers"]
+        )]
+        self._mock_pm(ctx, plugins=plugins)
+        result = await registry.dispatch("/plugins info anythink-groq", ctx, state)
+        assert result.error is False
+        assert "anythink-groq" in (result.message or "")
+        assert "1.5.0" in (result.message or "")
+        assert "Groq provider" in (result.message or "")
+
+    async def test_info_unknown_plugin_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx, plugins=[])
+        result = await registry.dispatch("/plugins info missing-pkg", ctx, state)
+        assert result.error is True
+        assert "not found" in (result.message or "").lower()
+
+    async def test_info_no_name_returns_usage_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx, plugins=[])
+        result = await registry.dispatch("/plugins info", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_install_success(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx, install_ok=True)
+        result = await registry.dispatch("/plugins install anythink-groq", ctx, state)
+        assert result.error is False
+        assert "Installed" in (result.message or "")
+
+    async def test_install_failure_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx, install_ok=False)
+        result = await registry.dispatch("/plugins install bad-pkg", ctx, state)
+        assert result.error is True
+
+    async def test_install_no_name_returns_usage_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx)
+        result = await registry.dispatch("/plugins install", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_remove_success(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx, remove_ok=True)
+        result = await registry.dispatch("/plugins remove anythink-groq", ctx, state)
+        assert result.error is False
+        assert "Removed" in (result.message or "")
+
+    async def test_remove_no_name_returns_usage_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx)
+        result = await registry.dispatch("/plugins remove", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_unknown_subcommand_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_pm(ctx)
+        result = await registry.dispatch("/plugins frobnitz", ctx, state)
+        assert result.error is True
+        assert "Unknown" in (result.message or "")
 
 
 class TestExitCommand:

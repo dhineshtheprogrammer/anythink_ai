@@ -11,9 +11,10 @@ from anythink import __version__
 from anythink.app.context import AppContext
 from anythink.commands.registry import CommandRegistry
 from anythink.config.models import ModelAlias
-from anythink.exceptions import AnythinkError
+from anythink.exceptions import AnythinkError, SearchError
 from anythink.files.reader import FileAttachment, ImageAttachment, TextAttachment
 from anythink.providers.base import BaseProvider, ChatMessage, ContentPart, ImagePart, TextPart, TokenUsage
+from anythink.search.base import SearchResult
 from anythink.session.models import Session
 from anythink.ui.banner import print_banner
 from anythink.ui.input import make_prompt_session
@@ -33,6 +34,16 @@ class ChatState:
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     session_name: str = ""
     pending_attachments: list[FileAttachment] = field(default_factory=list)
+    search_enabled: bool = False
+
+
+def _format_search_results(results: list[SearchResult], query: str) -> str:
+    lines = [f"[Web Search: {query!r}]"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"{i}. {r.title} — {r.url}")
+        if r.snippet:
+            lines.append(f"   {r.snippet}")
+    return "\n".join(lines)
 
 
 class ChatApp:
@@ -98,17 +109,34 @@ class ChatApp:
                 ctx.console.print(Text("Goodbye!", style=ctx.theme.primary))
                 break
 
-            if state.pending_attachments:
-                parts: list[ContentPart] = []
-                for att in state.pending_attachments:
-                    if isinstance(att, TextAttachment):
-                        parts.append(TextPart(f"[File: {att.filename}]\n{att.content}"))
-                    elif isinstance(att, ImageAttachment):
-                        parts.append(att.image_part)
+            # Accumulate extra content parts (search results + file attachments)
+            extra_parts: list[ContentPart] = []
+
+            if state.search_enabled:
+                backend = ctx.search_registry.get_available(ctx.config.search_provider)
+                if backend is not None:
+                    try:
+                        search_results = await backend.search(stripped)
+                        if search_results:
+                            extra_parts.append(
+                                TextPart(_format_search_results(search_results, stripped))
+                            )
+                    except SearchError as exc:
+                        ctx.console.print(
+                            Text(f"  [Search failed: {exc.user_message}]", style=ctx.theme.error)
+                        )
+
+            for att in state.pending_attachments:
+                if isinstance(att, TextAttachment):
+                    extra_parts.append(TextPart(f"[File: {att.filename}]\n{att.content}"))
+                elif isinstance(att, ImageAttachment):
+                    extra_parts.append(att.image_part)
+            state.pending_attachments.clear()
+
+            if extra_parts:
                 if stripped:
-                    parts.append(TextPart(stripped))
-                user_msg = ChatMessage(role="user", content=parts)
-                state.pending_attachments.clear()
+                    extra_parts.append(TextPart(stripped))
+                user_msg = ChatMessage(role="user", content=extra_parts)
             else:
                 user_msg = ChatMessage(role="user", content=stripped)
             state.history.append(user_msg)
@@ -199,4 +227,5 @@ class ChatApp:
             provider=provider,
             model_id=alias.model_id,
             context_window=alias.context_window,
+            search_enabled=ctx.config.web_search_enabled,
         )
