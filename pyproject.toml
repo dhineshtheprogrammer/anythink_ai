@@ -1,0 +1,124 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "anythink"
+version = "0.1.0"
+description = "A universal, AI-powered CLI chatbot with a beautiful terminal interface, multi-provider LLM support, and an extensible plugin architecture."
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "dhineshtheprogrammer", email = "dhineshpro33@gmail.com" }]
+requires-python = ">=3.11"
+keywords = ["ai", "cli", "chatbot", "llm", "terminal", "groq", "gemini", "openai", "anthropic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Terminals",
+]
+dependencies = [
+    "typer[all]>=0.12",
+    "rich>=13.7",
+    "prompt_toolkit>=3.0",
+    "keyring>=25.0",
+    "pyyaml>=6.0",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+groq = ["groq>=0.9"]
+gemini = ["google-generativeai>=0.7"]
+openai = ["openai>=1.30"]
+anthropic = ["anthropic>=0.28"]
+mistral = ["mistralai>=1.0"]
+cohere = ["cohere>=5.0"]
+search = ["duckduckgo-search>=6.0"]
+all = [
+    "groq>=0.9",
+    "google-generativeai>=0.7",
+    "openai>=1.30",
+    "anthropic>=0.28",
+    "mistralai>=1.0",
+    "cohere>=5.0",
+    "duckduckgo-search>=6.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+    "pytest-httpx>=0.30",
+    "ruff>=0.4",
+    "black>=24.0",
+    "mypy>=1.10",
+    "bandit>=1.7",
+    "types-PyYAML>=6.0",
+    "keyrings.alt>=5.0",
+]
+
+[project.scripts]
+anythink = "anythink.cli:app"
+
+[project.entry-points."anythink.providers"]
+groq = "anythink.providers.groq:GroqProvider"
+openai = "anythink.providers.openai:OpenAIProvider"
+anthropic = "anythink.providers.anthropic:AnthropicProvider"
+gemini = "anythink.providers.gemini:GeminiProvider"
+mistral = "anythink.providers.mistral:MistralProvider"
+cohere = "anythink.providers.cohere:CohereProvider"
+ollama = "anythink.providers.ollama:OllamaProvider"
+lm_studio = "anythink.providers.lm_studio:LMStudioProvider"
+
+[project.entry-points."anythink.search_backends"]
+duckduckgo = "anythink.search.duckduckgo:DuckDuckGoSearch"
+serpapi = "anythink.search.serpapi:SerpAPISearch"
+
+[project.entry-points."anythink.slash_commands"]
+builtin = "anythink.commands.handlers:register_commands"
+
+[project.urls]
+Homepage = "https://github.com/dhineshtheprogrammer/anythink_ai"
+Repository = "https://github.com/dhineshtheprogrammer/anythink_ai"
+Issues = "https://github.com/dhineshtheprogrammer/anythink_ai/issues"
+Changelog = "https://github.com/dhineshtheprogrammer/anythink_ai/blob/main/CHANGELOG.md"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anythink"]
+
+[tool.ruff]
+src = ["src"]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN"]
+ignore = ["ANN101", "ANN102", "ANN401"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/anythink"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "--cov=anythink --cov-report=term-missing --cov-fail-under=80"
+
+[tool.coverage.run]
+source = ["anythink"]
+omit = ["*/ui/input.py"]
+
+[tool.bandit]
+targets = ["src/anythink"]
+skips = ["B101"]

@@ -1,0 +1,98 @@
+"""Tests for ConfigManager and XDG path resolution."""
+
+from __future__ import annotations
+
+import pytest
+
+from anythink.config.manager import ConfigManager, Paths, validate_config
+from anythink.config.schema import AppConfig
+from anythink.exceptions import ConfigError
+
+
+class TestPaths:
+    def test_config_file_path(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.config_file == xdg_dirs.config_dir / "config.yaml"
+
+    def test_sessions_dir(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.sessions_dir == xdg_dirs.data_dir / "sessions"
+
+    def test_ensure_dirs_creates_all(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.config_dir.exists()
+        assert xdg_dirs.data_dir.exists()
+        assert xdg_dirs.sessions_dir.exists()
+        assert xdg_dirs.logs_dir.exists()
+
+
+class TestValidateConfig:
+    def test_valid_config_returns_no_errors(self) -> None:
+        errors = validate_config({"active_theme": "midnight"})
+        assert errors == []
+
+    def test_invalid_theme_returns_error(self) -> None:
+        errors = validate_config({"active_theme": "neon"})
+        assert len(errors) == 1
+        assert "neon" in str(errors[0])
+
+    def test_invalid_warning_threshold_type(self) -> None:
+        errors = validate_config({"context_warning_yellow": "high"})
+        assert len(errors) == 1
+
+    def test_out_of_range_threshold(self) -> None:
+        errors = validate_config({"context_warning_red": 1.5})
+        assert len(errors) == 1
+
+    def test_multiple_errors_returned(self) -> None:
+        errors = validate_config({"active_theme": "bad", "context_warning_yellow": -0.1})
+        assert len(errors) == 2
+
+
+class TestConfigManager:
+    def test_is_configured_false_when_no_file(self, config_manager: ConfigManager) -> None:
+        assert config_manager.is_configured() is False
+
+    def test_load_returns_defaults_when_no_file(self, config_manager: ConfigManager) -> None:
+        config = config_manager.load()
+        assert isinstance(config, AppConfig)
+        assert config.active_theme == "midnight"
+        assert config.session_autosave is True
+        assert config.default_model_alias is None
+
+    def test_save_creates_file(self, config_manager: ConfigManager) -> None:
+        config_manager.save(AppConfig())
+        assert config_manager.is_configured() is True
+
+    def test_save_and_load_roundtrip(self, config_manager: ConfigManager) -> None:
+        original = AppConfig(
+            default_model_alias="google2",
+            active_theme="aurora",
+            web_search_enabled=True,
+            context_warning_yellow=0.70,
+            context_warning_orange=0.88,
+            context_warning_red=0.97,
+            session_autosave=False,
+            search_provider="serpapi",
+        )
+        config_manager.save(original)
+        loaded = config_manager.load()
+
+        assert loaded.default_model_alias == "google2"
+        assert loaded.active_theme == "aurora"
+        assert loaded.web_search_enabled is True
+        assert loaded.context_warning_yellow == pytest.approx(0.70)
+        assert loaded.session_autosave is False
+        assert loaded.search_provider == "serpapi"
+
+    def test_load_raises_on_invalid_yaml(self, config_manager: ConfigManager) -> None:
+        config_manager.paths.config_file.write_text("active_theme: !!bad_type")
+        with pytest.raises(ConfigError):
+            config_manager.load()
+
+    def test_load_raises_on_invalid_values(self, config_manager: ConfigManager) -> None:
+        config_manager.paths.config_file.write_text("active_theme: invalid_theme\n")
+        with pytest.raises(ConfigError, match="invalid_theme"):
+            config_manager.load()
+
+    def test_load_empty_yaml_returns_defaults(self, config_manager: ConfigManager) -> None:
+        config_manager.paths.config_file.write_text("")
+        config = config_manager.load()
+        assert config.active_theme == "midnight"
