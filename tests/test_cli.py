@@ -54,13 +54,18 @@ def test_main_when_not_configured_exits_with_error() -> None:
     assert "not configured" in result.output.lower()
 
 
-def test_main_when_configured_shows_placeholder() -> None:
+def test_main_when_configured_starts_chat() -> None:
+    from unittest.mock import AsyncMock
     mock_manager = MagicMock()
     mock_manager.is_configured.return_value = True
-    with patch("anythink.cli.ConfigManager", return_value=mock_manager):
+    with patch("anythink.cli.ConfigManager", return_value=mock_manager), \
+            patch("anythink.cli.AppContext") as MockCtx, \
+            patch("anythink.cli.ChatApp") as MockChat:
+        MockChat.return_value.run = AsyncMock(return_value=0)
         result = runner.invoke(app, [])
     assert result.exit_code == 0
-    assert "anythink" in result.output.lower()
+    MockChat.assert_called_once_with(MockCtx.create.return_value)
+    MockChat.return_value.run.assert_awaited_once()
 
 
 def test_setup_wizard_stub() -> None:

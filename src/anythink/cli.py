@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import typer
 from typing_extensions import Annotated
 
 from anythink import __version__
+from anythink.app.chat import ChatApp
+from anythink.app.context import AppContext
 from anythink.config.manager import ConfigManager
 
 app = typer.Typer(
@@ -40,13 +44,14 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
-    # Placeholder until App orchestrator is implemented (Phase 5)
     config_manager = ConfigManager()
     if not config_manager.is_configured():
         typer.echo("Anythink is not configured yet. Run `anythink setup` to get started.")
         raise typer.Exit(1)
 
-    typer.echo("Starting Anythink chat session... (full UI coming in Phase 5)")
+    app_ctx = AppContext.create(paths=config_manager.paths)
+    exit_code = asyncio.run(ChatApp(app_ctx).run())
+    raise typer.Exit(exit_code)
 
 
 @app.command("setup")
