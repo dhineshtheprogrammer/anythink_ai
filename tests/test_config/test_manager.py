@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+import pytest
+
 from anythink.config.manager import ConfigManager, Paths, validate_config
 from anythink.config.schema import AppConfig
 from anythink.exceptions import ConfigError
@@ -21,6 +23,12 @@ class TestPaths:
         assert xdg_dirs.data_dir.exists()
         assert xdg_dirs.sessions_dir.exists()
         assert xdg_dirs.logs_dir.exists()
+
+    def test_plugins_file_path(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.plugins_file == xdg_dirs.config_dir / "plugins.yaml"
+
+    def test_keyring_index_file_path(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.keyring_index_file == xdg_dirs.config_dir / "keyring_index.yaml"
 
 
 class TestValidateConfig:
@@ -96,3 +104,46 @@ class TestConfigManager:
         config_manager.paths.config_file.write_text("")
         config = config_manager.load()
         assert config.active_theme == "midnight"
+
+    def test_save_and_load_with_local_servers(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(local_servers={"ollama": "http://localhost:11434"})
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert loaded.local_servers == {"ollama": "http://localhost:11434"}
+
+    def test_save_and_load_with_plugin_settings(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(plugin_settings={"myplugin": {"key": "val"}})
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert loaded.plugin_settings == {"myplugin": {"key": "val"}}
+
+    def test_load_invalid_local_servers_falls_back_to_empty(self, config_manager: ConfigManager) -> None:
+        import yaml
+        config_manager.paths.config_file.write_text(yaml.dump({"local_servers": "not-a-dict"}))
+        loaded = config_manager.load()
+        assert loaded.local_servers == {}
+
+
+    def test_load_invalid_plugin_settings_falls_back_to_empty(self, config_manager: ConfigManager) -> None:
+        import yaml
+        config_manager.paths.config_file.write_text(yaml.dump({"plugin_settings": "not-a-dict"}))
+        loaded = config_manager.load()
+        assert loaded.plugin_settings == {}
+
+
+class TestResolvePathsWithoutXdg:
+    def test_default_paths_use_home(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+        monkeypatch.delenv("XDG_DATA_HOME", raising=False)
+        monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+        monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+        from anythink.config.manager import _resolve_paths
+        paths = _resolve_paths()
+        assert ".config" in str(paths.config_dir) or "anythink" in str(paths.config_dir)
+        assert "anythink" in str(paths.config_dir)
+
+    def test_paths_use_xdg_when_env_set(self, monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory) -> None:
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+        from anythink.config.manager import _resolve_paths
+        paths = _resolve_paths()
+        assert str(tmp_path / "cfg") in str(paths.config_dir)
