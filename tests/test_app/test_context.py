@@ -14,6 +14,7 @@ from anythink.config.personas import PersonaManager
 from anythink.config.schema import AppConfig
 from anythink.keys.manager import KeyManager
 from anythink.providers.registry import ProviderRegistry
+from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
 from anythink.ui.theme import MIDNIGHT, Theme
 
@@ -50,6 +51,9 @@ class TestAppContextCreate:
 
     def test_session_manager_wired(self, ctx: AppContext) -> None:
         assert isinstance(ctx.session_manager, SessionManager)
+
+    def test_search_registry_wired(self, ctx: AppContext) -> None:
+        assert isinstance(ctx.search_registry, SearchRegistry)
 
     def test_config_manager_wired(self, ctx: AppContext) -> None:
         assert isinstance(ctx.config_manager, ConfigManager)

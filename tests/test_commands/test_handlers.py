@@ -37,7 +37,7 @@ def state(ctx: AppContext) -> ChatState:
 
 class TestRegisterCommands:
     def test_all_builtin_commands_registered(self, registry: CommandRegistry) -> None:
-        expected = {"help", "clear", "history", "tokens", "model", "persona", "exit", "quit"}
+        expected = {"help", "clear", "history", "tokens", "model", "persona", "exit", "quit", "search"}
         assert expected.issubset(set(registry.names()))
 
 
@@ -454,6 +454,102 @@ class TestFilesCommand:
         result = await registry.dispatch("/files", ctx, state)
         assert "a.py" in (result.message or "")
         assert "b.txt" in (result.message or "")
+
+
+class TestSearchCommand:
+    def _mock_ctx_with_backend(
+        self,
+        ctx: AppContext,
+        results: list | None = None,
+        *,
+        raises: bool = False,
+        available: bool = True,
+    ) -> AppContext:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from anythink.exceptions import SearchError
+        from anythink.search.registry import SearchRegistry
+
+        mock_backend = MagicMock()
+        mock_backend.name = "mock"
+        mock_backend.is_available = MagicMock(return_value=available)
+
+        if raises:
+            mock_backend.search = AsyncMock(
+                side_effect=SearchError("boom", user_message="search failed")
+            )
+        else:
+            mock_backend.search = AsyncMock(return_value=results or [])
+
+        r = SearchRegistry()
+        r.register(mock_backend)
+        ctx.search_registry = r
+        return ctx
+
+    async def test_on_enables_search(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        assert state.search_enabled is False
+        result = await registry.dispatch("/search on", ctx, state)
+        assert state.search_enabled is True
+        assert result.error is False
+        assert "enabled" in (result.message or "").lower()
+
+    async def test_off_disables_search(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        state.search_enabled = True
+        result = await registry.dispatch("/search off", ctx, state)
+        assert state.search_enabled is False
+        assert result.error is False
+        assert "disabled" in (result.message or "").lower()
+
+    async def test_no_args_returns_usage_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search", ctx, state)
+        assert result.error is True
+        assert "Usage" in (result.message or "")
+
+    async def test_query_shows_results(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.search.base import SearchResult
+
+        results = [SearchResult(title="Python.org", url="https://python.org", snippet="Language")]
+        self._mock_ctx_with_backend(ctx, results=results)
+
+        result = await registry.dispatch("/search python", ctx, state)
+
+        assert result.error is False
+        assert "Python.org" in (result.message or "")
+        assert "https://python.org" in (result.message or "")
+
+    async def test_query_shows_no_results_message(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_ctx_with_backend(ctx, results=[])
+        result = await registry.dispatch("/search obscure thing", ctx, state)
+        assert result.error is False
+        assert "No results" in (result.message or "")
+
+    async def test_no_backend_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.search.registry import SearchRegistry
+
+        ctx.search_registry = SearchRegistry()  # empty
+        result = await registry.dispatch("/search python", ctx, state)
+        assert result.error is True
+        assert "No search backend" in (result.message or "")
+
+    async def test_search_error_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        self._mock_ctx_with_backend(ctx, raises=True)
+        result = await registry.dispatch("/search python", ctx, state)
+        assert result.error is True
+        assert "search failed" in (result.message or "").lower()
 
 
 class TestExitCommand:

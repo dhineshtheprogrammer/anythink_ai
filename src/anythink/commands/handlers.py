@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from anythink.commands.base import CommandResult, SlashCommand
-from anythink.exceptions import FileError, SessionError
+from anythink.exceptions import FileError, SearchError, SessionError
 from anythink.files.reader import ImageAttachment, TextAttachment, read_image_file, read_text_file
 from anythink.providers.base import ChatMessage
 from anythink.session.models import Session
@@ -28,6 +28,7 @@ def register_commands(registry: CommandRegistry) -> None:
     registry.register(SlashCommand("file", "Attach a text file to the next message", _file, "/file <path>"))
     registry.register(SlashCommand("image", "Attach an image to the next message", _image, "/image <path>"))
     registry.register(SlashCommand("files", "List pending file attachments", _files, "/files"))
+    registry.register(SlashCommand("search", "Enable/disable web search or run a one-off search", _search, "/search on|off|<query>"))
     registry.register(SlashCommand("exit", "Exit Anythink", _exit_cmd, "/exit"))
     registry.register(SlashCommand("quit", "Exit Anythink", _exit_cmd, "/quit"))
 
@@ -258,6 +259,51 @@ async def _files(
             lines.append(f"  {att.filename} ({att.size_bytes / 1024:.1f} KB, text)")
         elif isinstance(att, ImageAttachment):
             lines.append(f"  {att.filename} ({att.size_bytes / 1024:.1f} KB, {att.image_part.mime_type})")
+    return CommandResult(message="\n".join(lines))
+
+
+async def _search(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    if not args:
+        return CommandResult(error=True, message="Usage: /search on|off|<query>")
+
+    sub = args.strip().lower()
+
+    if sub == "on":
+        state.search_enabled = True
+        return CommandResult(message="Web search enabled for this session.")
+
+    if sub == "off":
+        state.search_enabled = False
+        return CommandResult(message="Web search disabled.")
+
+    # One-off search with the full args as query
+    query = args.strip()
+    backend = ctx.search_registry.get_available(preferred=ctx.config.search_provider)
+    if backend is None:
+        return CommandResult(
+            error=True,
+            message="No search backend available. Install one with: pip install anythink[search]",
+        )
+
+    try:
+        results = await backend.search(query)
+    except SearchError as exc:
+        return CommandResult(error=True, message=exc.user_message)
+
+    if not results:
+        return CommandResult(message=f"No results found for '{query}'.")
+
+    lines = [f"Search results for '{query}':"]
+    for i, r in enumerate(results, 1):
+        lines.append(f"  {i}. {r.title}")
+        lines.append(f"     {r.url}")
+        if r.snippet:
+            lines.append(f"     {r.snippet[:120]}")
     return CommandResult(message="\n".join(lines))
 
 
