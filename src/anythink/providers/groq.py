@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, AsyncIterator
 
 import httpx
 
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderUnavailableError, RateLimitError
+from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderError, ProviderUnavailableError, RateLimitError
 from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TextPart, TokenUsage
 
 if TYPE_CHECKING:
@@ -86,6 +86,14 @@ class GroqProvider(BaseProvider):
             raise RateLimitError(str(e), provider=self.name) from e
         except groq.NotFoundError as e:
             raise ModelNotFoundError(str(e), provider=self.name) from e
+        except groq.APIStatusError as e:
+            if e.status_code == 413:
+                raise ProviderError(
+                    str(e),
+                    provider=self.name,
+                    user_message="Message history is too large for this model. Use /clear to reset the conversation.",
+                ) from e
+            raise ProviderUnavailableError(str(e), provider=self.name) from e
         except (groq.APIConnectionError, httpx.ConnectError) as e:
             raise ProviderUnavailableError(str(e), provider=self.name) from e
 

@@ -37,6 +37,30 @@ class ChatState:
     search_enabled: bool = False
 
 
+def _trim_history(history: list[ChatMessage], context_window: int) -> list[ChatMessage]:
+    """Drop oldest non-system messages until the estimated size fits the context window.
+
+    Uses 3.5 chars/token heuristic and reserves 80% of the window for the prompt
+    so there is headroom for the model's response.
+    """
+    char_budget = int(context_window * 3.5 * 0.80)
+
+    system_msgs = [m for m in history if m.role == "system"]
+    non_system = [m for m in history if m.role != "system"]
+
+    def _msg_chars(msg: ChatMessage) -> int:
+        if isinstance(msg.content, str):
+            return len(msg.content)
+        return sum(len(p.text) for p in msg.content if isinstance(p, TextPart))
+
+    available = char_budget - sum(_msg_chars(m) for m in system_msgs)
+
+    while non_system and sum(_msg_chars(m) for m in non_system) > available:
+        non_system.pop(0)
+
+    return system_msgs + non_system
+
+
 def _format_search_results(results: list[SearchResult], query: str) -> str:
     lines = [f"[Web Search: {query!r}]"]
     for i, r in enumerate(results, 1):
@@ -145,7 +169,7 @@ class ChatApp:
 
             try:
                 chunk_stream = state.provider.stream_chat(
-                    messages=state.history,
+                    messages=_trim_history(state.history, state.context_window),
                     model=state.model_id,
                 )
                 full_text, usage = await renderer.stream(chunk_stream)
