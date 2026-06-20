@@ -37,9 +37,8 @@ class TestMakeConsole:
     def test_different_themes_produce_different_primaries(self) -> None:
         c1 = make_console(MIDNIGHT)
         c2 = make_console(EMBER)
-        assert (
-            str(c1._theme_stack.get("anythink.primary"))
-            != str(c2._theme_stack.get("anythink.primary"))
+        assert str(c1._theme_stack.get("anythink.primary")) != str(
+            c2._theme_stack.get("anythink.primary")
         )
 
     def test_markup_enabled(self) -> None:

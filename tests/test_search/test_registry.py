@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from anythink.search.base import BaseSearchBackend, SearchResult
+from anythink.search.base import BaseSearchBackend
 from anythink.search.registry import SearchRegistry
 
 

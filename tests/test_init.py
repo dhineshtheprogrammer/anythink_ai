@@ -7,10 +7,11 @@ from unittest.mock import patch
 
 def test_version_when_package_not_installed() -> None:
     """The PackageNotFoundError fallback returns the hardcoded version."""
-    from importlib.metadata import PackageNotFoundError
     import importlib
+    from importlib.metadata import PackageNotFoundError
+
     import anythink
 
     with patch("importlib.metadata.version", side_effect=PackageNotFoundError("anythink")):
         importlib.reload(anythink)
-        assert anythink.__version__ == "0.1.0"
+        assert anythink.__version__ == "2.0.0"

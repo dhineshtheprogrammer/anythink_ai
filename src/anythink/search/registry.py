@@ -26,15 +26,12 @@ class SearchRegistry:
 
     def get_available(self, preferred: str | None = None) -> BaseSearchBackend | None:
         """Return the preferred backend if available, else the first available one."""
-        if preferred and (b := self._backends.get(preferred)):
-            if b.is_available():
-                return b
+        if preferred and (b := self._backends.get(preferred)) and b.is_available():
+            return b
         return next((b for b in self._backends.values() if b.is_available()), None)
 
     @classmethod
-    def from_entry_points(
-        cls, api_keys: dict[str, str | None] | None = None
-    ) -> SearchRegistry:
+    def from_entry_points(cls, api_keys: dict[str, str | None] | None = None) -> SearchRegistry:
         """Discover backends via the 'anythink.search_backends' entry point group."""
         registry = cls()
         keys: dict[str, str | None] = api_keys or {}
@@ -43,6 +40,6 @@ class SearchRegistry:
                 backend_cls = ep.load()
                 backend: BaseSearchBackend = backend_cls(api_key=keys.get(ep.name))
                 registry.register(backend)
-            except Exception:
+            except Exception:  # nosec B110 - skip unavailable search backends
                 pass
         return registry

@@ -11,11 +11,21 @@ from anythink.config.manager import ConfigManager, Paths, _resolve_paths
 from anythink.config.models import ModelRegistry
 from anythink.config.personas import PersonaManager
 from anythink.config.schema import AppConfig
+from anythink.embeddings.registry import EmbeddingRegistry
 from anythink.keys.manager import KeyManager
+from anythink.mcp.builtin.filesystem import FilesystemServer
+from anythink.mcp.builtin.rag import RAGServer
+from anythink.mcp.builtin.search import SearchServer
+from anythink.mcp.builtin.sessions import SessionsServer
+from anythink.mcp.manager import MCPManager
+from anythink.notify.notifier import Notifier
 from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
+from anythink.rag.manager import RAGManager
 from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
+from anythink.tools.base import ApprovalMode
+from anythink.tools.runner import ToolRunner
 from anythink.ui.console import make_console
 from anythink.ui.theme import Theme, get_theme
 
@@ -40,6 +50,11 @@ class AppContext:
     session_manager: SessionManager
     search_registry: SearchRegistry
     plugin_manager: PluginManager
+    rag_manager: RAGManager
+    embedding_registry: EmbeddingRegistry
+    tool_runner: ToolRunner
+    mcp_manager: MCPManager
+    notifier: Notifier
 
     @classmethod
     def create(
@@ -57,6 +72,30 @@ class AppContext:
         console = make_console(theme, file=console_file)
         key_manager = KeyManager(paths=resolved)
 
+        embedding_registry = EmbeddingRegistry.from_entry_points()
+        rag_manager = RAGManager(rag_dir=resolved.rag_dir, cache_dir=resolved.rag_cache_dir)
+
+        # Activate the persisted index from config if one is set
+        if config.active_rag_index:
+            rag_manager.use_index(config.active_rag_index)
+
+        tool_runner = ToolRunner(ApprovalMode(config.exec_mode))
+        notifier = Notifier(config_toggles=dict(config.notifications))
+
+        session_manager = SessionManager(sessions_dir=resolved.sessions_dir)
+        search_reg = SearchRegistry.from_entry_points(
+            api_keys={"serpapi": key_manager.get_key("serpapi")}
+        )
+        emb = EmbeddingRegistry.from_entry_points().get_available(config.embedding_backend)
+        mcp_manager = MCPManager(
+            builtin_servers=[
+                FilesystemServer(),
+                SessionsServer(session_manager),
+                RAGServer(rag_manager, emb),
+                SearchServer(search_reg, preferred=config.search_provider),
+            ]
+        )
+
         return cls(
             config=config,
             paths=resolved,
@@ -67,9 +106,12 @@ class AppContext:
             provider_registry=ProviderRegistry(),
             model_registry=ModelRegistry(path=resolved.models_file),
             persona_manager=PersonaManager(path=resolved.personas_file),
-            session_manager=SessionManager(sessions_dir=resolved.sessions_dir),
-            search_registry=SearchRegistry.from_entry_points(
-                api_keys={"serpapi": key_manager.get_key("serpapi")}
-            ),
+            session_manager=session_manager,
+            search_registry=search_reg,
             plugin_manager=PluginManager(),
+            rag_manager=rag_manager,
+            embedding_registry=embedding_registry,
+            tool_runner=tool_runner,
+            mcp_manager=mcp_manager,
+            notifier=notifier,
         )

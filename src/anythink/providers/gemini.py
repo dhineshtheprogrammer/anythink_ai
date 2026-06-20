@@ -2,18 +2,50 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
-import httpx
+from anythink.exceptions import (
+    AuthenticationError,
+    ModelNotFoundError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
+from anythink.providers.base import (
+    BaseProvider,
+    ChatMessage,
+    ImagePart,
+    ModelInfo,
+    StreamChunk,
+    TextPart,
+    TokenUsage,
+)
 
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderUnavailableError, RateLimitError
-from anythink.providers.base import BaseProvider, ChatMessage, ImagePart, ModelInfo, StreamChunk, TextPart, TokenUsage
-
+if TYPE_CHECKING:
+    import google.generativeai
 
 _KNOWN_MODELS: list[ModelInfo] = [
-    ModelInfo("gemini-2.0-flash", "Gemini 2.0 Flash", 1_000_000, supports_vision=True, supports_function_calling=True),
-    ModelInfo("gemini-1.5-pro", "Gemini 1.5 Pro", 2_000_000, supports_vision=True, supports_function_calling=True),
-    ModelInfo("gemini-1.5-flash", "Gemini 1.5 Flash", 1_000_000, supports_vision=True, supports_function_calling=True),
+    ModelInfo(
+        "gemini-2.0-flash",
+        "Gemini 2.0 Flash",
+        1_000_000,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    ModelInfo(
+        "gemini-1.5-pro",
+        "Gemini 1.5 Pro",
+        2_000_000,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    ModelInfo(
+        "gemini-1.5-flash",
+        "Gemini 1.5 Flash",
+        1_000_000,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
 ]
 
 
@@ -24,22 +56,23 @@ class GeminiProvider(BaseProvider):
     def _configure(self) -> None:
         try:
             import google.generativeai as genai
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "google-generativeai SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[gemini]",
-            )
+            ) from e
         genai.configure(api_key=self._api_key)
 
-    def _get_model(self, model: str) -> "google.generativeai.GenerativeModel":
+    def _get_model(self, model: str) -> google.generativeai.GenerativeModel:
         self._configure()
         import google.generativeai as genai
+
         return genai.GenerativeModel(model)
 
-    def _build_contents(self, messages: list[ChatMessage]) -> list:
+    def _build_contents(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
         """Convert ChatMessage list to Gemini content format (skips system messages)."""
-        contents = []
+        contents: list[dict[str, Any]] = []
         for msg in messages:
             if msg.role == "system":
                 continue
@@ -47,19 +80,25 @@ class GeminiProvider(BaseProvider):
             if isinstance(msg.content, str):
                 contents.append({"role": role, "parts": [{"text": msg.content}]})
             else:
-                parts = []
+                parts: list[dict[str, Any]] = []
                 for part in msg.content:
                     if isinstance(part, TextPart):
                         parts.append({"text": part.text})
                     elif isinstance(part, ImagePart):
-                        parts.append({"inline_data": {"mime_type": part.mime_type, "data": part.data}})
+                        parts.append(
+                            {"inline_data": {"mime_type": part.mime_type, "data": part.data}}
+                        )
                 contents.append({"role": role, "parts": parts})
         return contents
 
     def _get_system_instruction(self, messages: list[ChatMessage]) -> str | None:
         for msg in messages:
             if msg.role == "system":
-                return self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content
+                return (
+                    self._content_to_text(msg.content)
+                    if isinstance(msg.content, list)
+                    else msg.content
+                )
         return None
 
     async def stream_chat(
@@ -72,7 +111,6 @@ class GeminiProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         try:
             import google.generativeai as genai
-            import google.api_core.exceptions as gexc
 
             system = self._get_system_instruction(messages)
             genai_model = genai.GenerativeModel(
@@ -103,12 +141,12 @@ class GeminiProvider(BaseProvider):
                     total_tokens=usage_meta.total_token_count or 0,
                 )
                 yield StreamChunk(text="", finish_reason="stop", usage=usage)
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "google-generativeai SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[gemini]",
-            )
+            ) from e
         except Exception as e:
             err_str = str(e).lower()
             if "api key" in err_str or "unauthenticated" in err_str:
@@ -123,6 +161,7 @@ class GeminiProvider(BaseProvider):
         try:
             self._configure()
             import google.generativeai as genai
+
             return [
                 ModelInfo(
                     id=m.name.removeprefix("models/"),
@@ -130,7 +169,7 @@ class GeminiProvider(BaseProvider):
                     context_window=getattr(m, "input_token_limit", 1_000_000),
                     supports_vision=True,
                 )
-                async for m in await genai.list_models_async()  # type: ignore[attr-defined]
+                async for m in await genai.list_models_async()
                 if "generateContent" in (m.supported_generation_methods or [])
             ]
         except Exception:

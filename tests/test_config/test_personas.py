@@ -22,6 +22,7 @@ class TestPersona:
 
     def test_default_created_at_set(self) -> None:
         from datetime import datetime
+
         before = datetime.utcnow()
         p = _make_persona()
         after = datetime.utcnow()

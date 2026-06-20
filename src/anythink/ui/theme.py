@@ -12,13 +12,13 @@ class Theme:
     """Color palette for the terminal UI."""
 
     name: str
-    primary: str    # main assistant-response text
+    primary: str  # main assistant-response text
     secondary: str  # subtext, metadata
-    accent: str     # headers, highlights
-    muted: str      # dimmed / placeholder text
-    error: str      # error messages
-    warning: str    # warning / orange-zone context bar
-    success: str    # success messages, green-zone context bar
+    accent: str  # headers, highlights
+    muted: str  # dimmed / placeholder text
+    error: str  # error messages
+    warning: str  # warning / orange-zone context bar
+    success: str  # success messages, green-zone context bar
 
 
 MIDNIGHT = Theme(
@@ -77,4 +77,4 @@ def get_theme(name: str) -> Theme:
         raise ConfigError(
             message=f"Unknown theme: {name!r}. Valid themes: {valid}",
             user_message=f"Unknown theme '{name}'. Choose from: {valid}",
-        )
+        ) from None

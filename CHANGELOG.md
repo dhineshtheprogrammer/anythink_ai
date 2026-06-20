@@ -6,6 +6,81 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [2.0.0] — 2026-06-20
+
+Anythink 2.0 transforms the CLI chatbot into a full **AI terminal workstation** with a Textual TUI, RAG, agentic tools, MCP, voice, notifications, and a 4-panel dashboard.
+
+### Added — V2 Features
+
+#### Textual TUI Shell (Phase 1)
+- `AnythinkApp(textual.App)` replaces the prompt_toolkit event loop; all V1 features forward-compatible
+- **Chat bubbles**: `UserBubble` (right-aligned, primary border), `AIBubble` (left-aligned, streaming → Markdown, length indicator, bookmark ✦, RAG retrieval footer), `SystemBubble` (info/success/error/warning/search/code/rag/mcp icons)
+- Persistent two-line **HUD** (`HUDWidget`) with reactive diff-based redraws: app version, session name, branch, theme, model alias, provider status dot, context progress bar, search status, active RAG index
+- Response length indicator (`·` / `··` / `···` / `✦` / `✦✦`) based on word count
+- **Startup experience**: returning-user detection, mid-conversation session resume prompt, interactive session naming (Enter = auto-name)
+
+#### Session Layer (Phase 2–3)
+- **Session file locking** via `filelock.FileLock` — prevents concurrent writes across multiple instances
+- **Session naming**: `/rename <name>`, auto-slug filenames, auto-name after first response
+- **Undo**: `/undo` — removes last user+AI pair from history, bubbles, disk; single-level, branch-aware
+- **Bookmarks** (`bookmarks/manager.py`): `/bookmark [turn]`, `/bookmark label <n> <text>`, `/bookmarks`, `/bookmark export`, `/bookmark search <query>` (cross-session); permanent ✦ in AI bubble titles
+- **Conversation branching** (`branch/manager.py`): `/branch` (create), `/branch list`, `/branch switch <name>`; branches stored in session file with diverge-turn metadata; HUD shows active branch
+
+#### RAG — Retrieval-Augmented Generation (Phase 4)
+- **Pluggable embeddings registry** (`anythink.embedding_backends` entry-point group): `MockEmbeddingBackend` (64-dim, zero-dep, deterministic), `LocalEmbeddingBackend` (sentence-transformers, `[rag]` extra)
+- **VectorStore**: pure-Python cosine-similarity search + gzip-JSON persistence
+- **Chunkers**: `chunk_text()` (paragraph/sentence/word boundaries), `chunk_code()` (function/class boundaries), `chunk_file()` (auto-detect by extension)
+- **RAGManager**: named indexes (Project / Document Library), Persist/Rebuild modes, `/rag list|new|use|off|rebuild|info|delete|status`
+- **Transparent retrieval**: active index auto-retrieves top-k chunks, injects into user message context; AI bubble shows collapsed footer (`📚 Retrieved from N sources`)
+- HUD `📚 RAG:` field shows active index name
+
+#### Tool Framework + Code Execution + Agentic Browsing (Phase 5)
+- `BaseTool` / `ToolResult` / `ApprovalMode` (ASK/AUTO) — reusable tool abstraction
+- `ToolRunner` — approval-gated execution; `ask_fn` callback for TUI approval; auto mode bypasses prompt
+- **Code execution** (`tools/exec.py`): runs user code via PATH runtimes (python3, bash, node, ruby, go, sqlite3); 30s timeout; styled output bubble (stdout/stderr/exit/duration); result fed to AI; `/exec <lang> <code>` / `/exec mode ask|auto`
+- **Agentic browsing** (`browse/fetch.py`): two-tier (snippets via search backends + full-page httpx default, optional Playwright headless via `[browser]` extra); `/browse <url|query>` / `/browse mode ask|auto|http|headless`
+
+#### MCP — Model Context Protocol (Phase 6)
+- **Built-in servers** (no SDK required): FilesystemServer (list_dir, read_file), SessionsServer (list_sessions, get_session), RAGServer (rag_search), SearchServer (web_search)
+- **External client** (`mcp/client.py`): stdio and SSE transport via `mcp` SDK (`pip install anythink[mcp]`); lazy import with `MCPError` guidance
+- **Anythink as server** (`mcp/server.py`): exposes built-in tools via FastMCP; `/mcp server start|stop|status`
+- `MCPManager` — routing table, tool discovery, `call_tool()` dispatch
+- `/mcp list|tools|connect|disconnect|status|call <tool> [k=v ...]|server`
+
+#### 4-Panel Dashboard Mode (Phase 7)
+- `Ctrl+D` toggles Simple ↔ Dashboard; `anythink --dashboard` launches directly; all panels always composed, hidden via CSS `display: none` in simple mode
+- **Left panel** (`SessionListPanel`): scrollable session list with timestamps; click to load session into center; `Ctrl+L` toggles visibility
+- **Right panel** (`StatsPanel`): live model, token usage %, branch, MCP server count, RAG index; `Ctrl+R` toggles
+- **Bottom tabs** (`TabbedContent`): Files (directory browser via FilesystemServer), RAG (index list with active marker), Tool Output (cumulative tool call log with timestamps)
+- Tool call events from exec/browse/MCP workers automatically routed to Tool Output tab
+
+#### Voice Input (Phase 8)
+- `VoiceRecorder` — non-blocking `sounddevice.InputStream` callback; float32 NumPy output; `[voice]` extra
+- `VoiceTranscriber` — lazy-loads Whisper model; stereo→mono conversion; language pin or auto-detect; empty audio short-circuits model load
+- TUI flow: `/voice` → "Recording… press Enter to stop" → `asyncio.to_thread` stop + transcribe → text in Input widget (editable before sending)
+- `/voice model tiny|base|small|medium|large|turbo` / `/voice language <code>`
+
+#### Desktop Notifications (Phase 8)
+- Cross-platform backends: Windows (PowerShell toast), macOS (`osascript`), Linux (`notify-send`), NullBackend fallback
+- Per-type toggles: `rag_build_done`, `slow_response` (≥15s), `exec_done` (≥10s), `browse_done`, `provider_failure`
+- `/notify on|off|status` / `/notify type <name> on|off`
+
+### Changed — V1 Features Preserved
+- All V1 slash commands intact: `/help`, `/clear`, `/history`, `/tokens`, `/model`, `/persona`, `/session`, `/file`, `/image`, `/files`, `/search`, `/plugins`, `/exit`, `/quit`
+- All V1 providers unchanged (Groq, Gemini, OpenAI, Anthropic, Mistral, Cohere, Ollama, LM Studio)
+- All V1 key management, model aliases, session persistence, XDG paths unchanged
+- `anythink` (no flag) still starts Simple Chat Mode — V1 UX preserved
+
+### Technical
+- 937 tests, 80%+ coverage enforced
+- ruff / black / mypy-strict / bandit all clean
+- CI matrix: Python 3.11, 3.12, 3.13; extras-install verification step
+- OIDC trusted publishing via `publish.yml` on `v*.*.*` tags
+
+[2.0.0]: https://github.com/dhineshtheprogrammer/anythink_ai/releases/tag/v2.0.0
+
+---
+
 ## [0.1.0] — 2026-06-19
 
 Initial release of Anythink — a universal, AI-powered CLI chatbot.

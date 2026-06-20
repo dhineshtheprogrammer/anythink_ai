@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import datetime
 
-import pytest
-
 from anythink.providers.base import ChatMessage, ImagePart, TextPart
 from anythink.session.models import Session, _msg_from_dict, _msg_to_dict
 

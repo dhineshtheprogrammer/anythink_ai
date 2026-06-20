@@ -3,15 +3,20 @@
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderUnavailableError, RateLimitError
+from anythink.exceptions import (
+    AuthenticationError,
+    ModelNotFoundError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
 from anythink.providers.base import (
     BaseProvider,
     ChatMessage,
-    ContentPart,
     ImagePart,
     ModelInfo,
     StreamChunk,
@@ -25,8 +30,12 @@ if TYPE_CHECKING:
 
 _KNOWN_MODELS: list[ModelInfo] = [
     ModelInfo("gpt-4o", "GPT-4o", 128_000, supports_vision=True, supports_function_calling=True),
-    ModelInfo("gpt-4o-mini", "GPT-4o Mini", 128_000, supports_vision=True, supports_function_calling=True),
-    ModelInfo("gpt-4-turbo", "GPT-4 Turbo", 128_000, supports_vision=True, supports_function_calling=True),
+    ModelInfo(
+        "gpt-4o-mini", "GPT-4o Mini", 128_000, supports_vision=True, supports_function_calling=True
+    ),
+    ModelInfo(
+        "gpt-4-turbo", "GPT-4 Turbo", 128_000, supports_vision=True, supports_function_calling=True
+    ),
     ModelInfo("gpt-3.5-turbo", "GPT-3.5 Turbo", 16_385, supports_function_calling=True),
 ]
 
@@ -35,36 +44,38 @@ class OpenAIProvider(BaseProvider):
     name = "openai"
     display_name = "OpenAI"
 
-    def _client(self) -> "openai_sdk.AsyncOpenAI":
+    def _client(self) -> openai_sdk.AsyncOpenAI:
         try:
             import openai
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "openai SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[openai]",
-            )
-        kwargs: dict = {"api_key": self._api_key or "not-needed"}
+            ) from e
+        kwargs: dict[str, Any] = {"api_key": self._api_key or "not-needed"}
         if self._base_url:
             kwargs["base_url"] = self._base_url
         return openai.AsyncOpenAI(**kwargs)
 
-    def _build_messages(self, messages: list[ChatMessage]) -> list[dict]:
-        result = []
+    def _build_messages(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
         for msg in messages:
             if isinstance(msg.content, str):
                 result.append({"role": msg.role, "content": msg.content})
             else:
-                parts: list[dict] = []
+                parts: list[dict[str, Any]] = []
                 for part in msg.content:
                     if isinstance(part, TextPart):
                         parts.append({"type": "text", "text": part.text})
                     elif isinstance(part, ImagePart):
                         b64 = base64.b64encode(part.data).decode()
-                        parts.append({
-                            "type": "image_url",
-                            "image_url": {"url": f"data:{part.mime_type};base64,{b64}"},
-                        })
+                        parts.append(
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{part.mime_type};base64,{b64}"},
+                            }
+                        )
                 result.append({"role": msg.role, "content": parts})
         return result
 
@@ -77,7 +88,7 @@ class OpenAIProvider(BaseProvider):
         temperature: float = 0.7,
     ) -> AsyncIterator[StreamChunk]:
         client = self._client()
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(messages),
             "temperature": temperature,
@@ -88,6 +99,7 @@ class OpenAIProvider(BaseProvider):
 
         try:
             import openai
+
             stream = await client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 choice = chunk.choices[0] if chunk.choices else None
@@ -119,7 +131,6 @@ class OpenAIProvider(BaseProvider):
     async def list_models(self) -> list[ModelInfo]:
         try:
             client = self._client()
-            import openai
             response = await client.models.list()
             return [
                 ModelInfo(

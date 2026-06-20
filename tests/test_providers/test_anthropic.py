@@ -64,12 +64,16 @@ class TestAnthropicProvider:
 
     def test_build_messages_with_image_part(self) -> None:
         from anythink.providers.base import ChatMessage, ImagePart, TextPart
+
         p = AnthropicProvider()
         messages = [
-            ChatMessage(role="user", content=[
-                TextPart("Look at this:"),
-                ImagePart(b"\x89PNG\r\n", "image/png"),
-            ]),
+            ChatMessage(
+                role="user",
+                content=[
+                    TextPart("Look at this:"),
+                    ImagePart(b"\x89PNG\r\n", "image/png"),
+                ],
+            ),
         ]
         api_msgs, system = p._build_messages(messages)
         assert len(api_msgs) == 1

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from unittest.mock import patch
 
 import keyring.errors
@@ -21,6 +20,7 @@ def km(xdg_dirs: Paths) -> KeyManager:
 
 # ── get / set / has ───────────────────────────────────────────────────────────
 
+
 class TestGetSetHas:
     def test_get_returns_none_when_not_set(self, km: KeyManager) -> None:
         with patch("keyring.get_password", return_value=None):
@@ -31,8 +31,10 @@ class TestGetSetHas:
             assert km.has_key("groq") is False
 
     def test_set_calls_keyring(self, km: KeyManager) -> None:
-        with patch("keyring.set_password") as mock_set, \
-                patch("keyring.get_password", return_value="sk-abc"):
+        with (
+            patch("keyring.set_password") as mock_set,
+            patch("keyring.get_password", return_value="sk-abc"),
+        ):
             km.set_key("groq", "sk-abc")
             mock_set.assert_called_once_with("anythink", "groq", "sk-abc")
 
@@ -41,8 +43,7 @@ class TestGetSetHas:
             assert km.get_key("openai") == "sk-xyz"
 
     def test_has_key_true_after_set(self, km: KeyManager) -> None:
-        with patch("keyring.set_password"), \
-                patch("keyring.get_password", return_value="val"):
+        with patch("keyring.set_password"), patch("keyring.get_password", return_value="val"):
             km.set_key("anthropic", "val")
             assert km.has_key("anthropic") is True
 
@@ -58,6 +59,7 @@ class TestGetSetHas:
 
 
 # ── delete ────────────────────────────────────────────────────────────────────
+
 
 class TestDeleteKey:
     def test_delete_calls_keyring(self, km: KeyManager) -> None:
@@ -76,6 +78,7 @@ class TestDeleteKey:
 
 
 # ── index management ──────────────────────────────────────────────────────────
+
 
 class TestIndex:
     def test_list_providers_empty_initially(self, km: KeyManager) -> None:

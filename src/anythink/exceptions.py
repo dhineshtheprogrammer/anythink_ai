@@ -55,3 +55,31 @@ class SearchError(AnythinkError):
 
 class FileError(AnythinkError):
     """Raised when a file cannot be read, is too large, or has an unsupported format."""
+
+
+class RAGError(AnythinkError):
+    """Raised when a RAG index cannot be built, loaded, queried, or managed."""
+
+
+class ToolExecutionError(AnythinkError):
+    """Raised when a tool (e.g. code execution) fails to run or returns an error."""
+
+
+class BrowseError(AnythinkError):
+    """Raised when an agentic web-browsing fetch fails."""
+
+
+class MCPError(AnythinkError):
+    """Raised when an MCP client/server operation fails."""
+
+
+class VoiceError(AnythinkError):
+    """Raised when voice capture or transcription fails."""
+
+
+class BranchError(AnythinkError):
+    """Raised when a conversation branch cannot be created, switched, or found."""
+
+
+class NotificationError(AnythinkError):
+    """Raised when a desktop notification cannot be delivered."""

@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import base64
-from typing import TYPE_CHECKING, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderUnavailableError, RateLimitError
+from anythink.exceptions import (
+    AuthenticationError,
+    ModelNotFoundError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
 from anythink.providers.base import (
     BaseProvider,
     ChatMessage,
@@ -23,9 +29,27 @@ if TYPE_CHECKING:
 
 
 _KNOWN_MODELS: list[ModelInfo] = [
-    ModelInfo("claude-opus-4-8", "Claude Opus 4.8", 200_000, supports_vision=True, supports_function_calling=True),
-    ModelInfo("claude-sonnet-4-6", "Claude Sonnet 4.6", 200_000, supports_vision=True, supports_function_calling=True),
-    ModelInfo("claude-haiku-4-5-20251001", "Claude Haiku 4.5", 200_000, supports_vision=True, supports_function_calling=True),
+    ModelInfo(
+        "claude-opus-4-8",
+        "Claude Opus 4.8",
+        200_000,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    ModelInfo(
+        "claude-sonnet-4-6",
+        "Claude Sonnet 4.6",
+        200_000,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
+    ModelInfo(
+        "claude-haiku-4-5-20251001",
+        "Claude Haiku 4.5",
+        200_000,
+        supports_vision=True,
+        supports_function_calling=True,
+    ),
 ]
 
 
@@ -33,43 +57,51 @@ class AnthropicProvider(BaseProvider):
     name = "anthropic"
     display_name = "Anthropic"
 
-    def _client(self) -> "anthropic_sdk.AsyncAnthropic":
+    def _client(self) -> anthropic_sdk.AsyncAnthropic:
         try:
             import anthropic
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "anthropic SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[anthropic]",
-            )
+            ) from e
         return anthropic.AsyncAnthropic(api_key=self._api_key)
 
-    def _build_messages(self, messages: list[ChatMessage]) -> tuple[list[dict], str | None]:
+    def _build_messages(
+        self, messages: list[ChatMessage]
+    ) -> tuple[list[dict[str, Any]], str | None]:
         """Return (messages_list, system_prompt). Extracts system role separately."""
         system: str | None = None
-        result: list[dict] = []
+        result: list[dict[str, Any]] = []
         for msg in messages:
             if msg.role == "system":
-                system = self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content
+                system = (
+                    self._content_to_text(msg.content)
+                    if isinstance(msg.content, list)
+                    else msg.content
+                )
                 continue
 
             if isinstance(msg.content, str):
                 result.append({"role": msg.role, "content": msg.content})
             else:
-                parts: list[dict] = []
+                parts: list[dict[str, Any]] = []
                 for part in msg.content:
                     if isinstance(part, TextPart):
                         parts.append({"type": "text", "text": part.text})
                     elif isinstance(part, ImagePart):
                         b64 = base64.b64encode(part.data).decode()
-                        parts.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": part.mime_type,
-                                "data": b64,
-                            },
-                        })
+                        parts.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": part.mime_type,
+                                    "data": b64,
+                                },
+                            }
+                        )
                 result.append({"role": msg.role, "content": parts})
         return result, system
 
@@ -83,7 +115,7 @@ class AnthropicProvider(BaseProvider):
     ) -> AsyncIterator[StreamChunk]:
         client = self._client()
         api_messages, system = self._build_messages(messages)
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": api_messages,
             "max_tokens": max_tokens or 4096,
@@ -94,6 +126,7 @@ class AnthropicProvider(BaseProvider):
 
         try:
             import anthropic
+
             async with client.messages.stream(**kwargs) as stream:
                 async for text in stream.text_stream:
                     yield StreamChunk(text=text, finish_reason=None)
@@ -119,7 +152,6 @@ class AnthropicProvider(BaseProvider):
     async def test_connection(self) -> bool:
         try:
             client = self._client()
-            import anthropic
             await client.messages.create(
                 model="claude-haiku-4-5-20251001",
                 max_tokens=1,

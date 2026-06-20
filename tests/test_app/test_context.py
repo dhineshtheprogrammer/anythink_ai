@@ -17,7 +17,6 @@ from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
 from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
-from anythink.ui.theme import MIDNIGHT, Theme
 
 
 @pytest.fixture()

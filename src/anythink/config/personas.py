@@ -28,8 +28,12 @@ class Persona:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "Persona":
-        created_at = datetime.fromisoformat(data["created_at"]) if "created_at" in data else datetime.utcnow()
+    def from_dict(cls, data: dict[str, Any]) -> Persona:
+        created_at = (
+            datetime.fromisoformat(data["created_at"])
+            if "created_at" in data
+            else datetime.utcnow()
+        )
         return cls(
             name=data["name"],
             system_prompt=data["system_prompt"],
@@ -54,11 +58,13 @@ class PersonaManager:
             return self._personas
 
         try:
-            raw: list[dict] = yaml.safe_load(self._path.read_text()) or []
+            raw: list[dict[str, Any]] = yaml.safe_load(self._path.read_text()) or []
         except yaml.YAMLError as e:
             raise ConfigError(f"Failed to parse personas.yaml: {e}") from e
 
-        self._personas = {entry["name"]: Persona.from_dict(entry) for entry in raw if "name" in entry}
+        self._personas = {
+            entry["name"]: Persona.from_dict(entry) for entry in raw if "name" in entry
+        }
         return self._personas
 
     def save(self) -> None:

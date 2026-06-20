@@ -2,13 +2,34 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from pathlib import Path
 
 import yaml
 
 from anythink.exceptions import SessionError
+from anythink.session.locking import SessionLock
 from anythink.session.models import Session
+
+
+def slugify(text: str) -> str:
+    """Convert *text* to a filename-safe slug.
+
+    Replaces whitespace runs with ``-``, strips non-alphanumeric characters,
+    lower-cases, and trims to 80 characters.
+    """
+    text = text.lower().strip()
+    text = re.sub(r"[\s]+", "-", text)
+    text = re.sub(r"[^a-z0-9\-]", "", text)
+    text = re.sub(r"-{2,}", "-", text).strip("-")
+    return text[:80]
+
+
+def auto_session_name(model_id: str) -> str:
+    """Generate an automatic session name from the current date and model ID."""
+    now = datetime.now()
+    return f"Session · {now.strftime('%b')} {now.day} · {model_id}"
 
 
 class SessionManager:
@@ -18,14 +39,19 @@ class SessionManager:
         self._dir = sessions_dir
 
     def save(self, session: Session) -> None:
-        """Write (or overwrite) a session file. Updates session.updated_at in place."""
+        """Write (or overwrite) a session file under an exclusive lock.
+
+        Acquires a per-file lock so concurrent Anythink instances can each
+        manage their own session without corrupting shared data.
+        """
         self._dir.mkdir(parents=True, exist_ok=True)
         session.updated_at = datetime.utcnow()
         path = self._dir / f"{session.id}.yaml"
-        path.write_text(
-            yaml.dump(session.to_dict(), default_flow_style=False, sort_keys=False),
-            encoding="utf-8",
-        )
+        with SessionLock(path):
+            path.write_text(
+                yaml.dump(session.to_dict(), default_flow_style=False, sort_keys=False),
+                encoding="utf-8",
+            )
 
     def load(self, session_id: str) -> Session:
         """Load a session by its exact ID. Raises SessionError if not found."""
@@ -56,7 +82,7 @@ class SessionManager:
             try:
                 raw = yaml.safe_load(path.read_text(encoding="utf-8"))
                 sessions.append(Session.from_dict(raw))
-            except Exception:
+            except Exception:  # nosec B112 - skip corrupt session files
                 continue
         return sorted(sessions, key=lambda s: s.updated_at, reverse=True)
 

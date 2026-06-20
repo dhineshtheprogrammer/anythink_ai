@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from anythink.app.context import AppContext
 from anythink.app.chat import ChatState
+from anythink.app.context import AppContext
 from anythink.commands.base import CommandResult, SlashCommand
 from anythink.commands.registry import CommandRegistry
 from anythink.config.manager import Paths
@@ -38,6 +38,7 @@ def ctx(xdg_dirs: Paths) -> AppContext:
 @pytest.fixture()
 def state(ctx: AppContext) -> ChatState:
     from unittest.mock import MagicMock
+
     provider = MagicMock()
     provider.name = "mock"
     return ChatState(provider=provider, model_id="test-model", context_window=4096)
@@ -98,9 +99,7 @@ class TestDispatch:
         result = await registry.dispatch("/exit", ctx, state)
         assert result.should_exit is True
 
-    async def test_args_stripped_and_passed(
-        self, ctx: AppContext, state: ChatState
-    ) -> None:
+    async def test_args_stripped_and_passed(self, ctx: AppContext, state: ChatState) -> None:
         received: list[str] = []
 
         async def _capture(c, args, s, reg):  # type: ignore[no-untyped-def]

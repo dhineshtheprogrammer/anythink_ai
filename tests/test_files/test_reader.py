@@ -18,7 +18,6 @@ from anythink.files.reader import (
 )
 from anythink.providers.base import ImagePart
 
-
 # ── read_text_file ────────────────────────────────────────────────────────────
 
 
@@ -82,8 +81,23 @@ class TestReadTextFile:
         with pytest.raises(FileError, match="binary"):
             read_text_file(f)
 
-    @pytest.mark.parametrize("ext", [".py", ".js", ".ts", ".go", ".rs", ".json", ".yaml",
-                                      ".md", ".txt", ".csv", ".toml", ".log"])
+    @pytest.mark.parametrize(
+        "ext",
+        [
+            ".py",
+            ".js",
+            ".ts",
+            ".go",
+            ".rs",
+            ".json",
+            ".yaml",
+            ".md",
+            ".txt",
+            ".csv",
+            ".toml",
+            ".log",
+        ],
+    )
     def test_supported_extensions_accepted(self, tmp_path: Path, ext: str) -> None:
         f = tmp_path / f"file{ext}"
         f.write_text("content", encoding="utf-8")

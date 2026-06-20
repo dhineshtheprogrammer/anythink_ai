@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
 from typer.testing import CliRunner
 
 from anythink.cli import app
@@ -14,10 +13,11 @@ runner = CliRunner()
 
 # ── core / startup ─────────────────────────────────────────────────────────────
 
+
 def test_version() -> None:
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
-    assert "0.1.0" in result.output
+    assert "2.0.0" in result.output
 
 
 def test_help() -> None:
@@ -50,14 +50,17 @@ def test_main_when_not_configured_exits_with_error() -> None:
 def test_main_when_configured_starts_chat() -> None:
     mock_manager = MagicMock()
     mock_manager.is_configured.return_value = True
-    with patch("anythink.cli.ConfigManager", return_value=mock_manager), \
-            patch("anythink.cli.AppContext") as MockCtx, \
-            patch("anythink.cli.ChatApp") as MockChat:
-        MockChat.return_value.run = AsyncMock(return_value=0)
+    with (
+        patch("anythink.cli.ConfigManager", return_value=mock_manager),
+        patch("anythink.cli.AppContext") as MockCtx,
+        patch("anythink.cli.AnythinkApp") as MockApp,
+    ):
+        MockApp.return_value.run = MagicMock()
+        MockApp.return_value.return_code = 0
         result = runner.invoke(app, [])
     assert result.exit_code == 0
-    MockChat.assert_called_once_with(MockCtx.create.return_value)
-    MockChat.return_value.run.assert_awaited_once()
+    MockApp.assert_called_once_with(MockCtx.create.return_value, dashboard=False)
+    MockApp.return_value.run.assert_called_once()
 
 
 def test_setup_wizard_stub() -> None:
@@ -67,6 +70,7 @@ def test_setup_wizard_stub() -> None:
 
 
 # ── keys list ─────────────────────────────────────────────────────────────────
+
 
 def test_keys_list_no_keys() -> None:
     with patch("anythink.keys.manager.KeyManager.list_providers", return_value=[]):
@@ -86,6 +90,7 @@ def test_keys_list_shows_providers() -> None:
 
 # ── keys add ──────────────────────────────────────────────────────────────────
 
+
 def test_keys_add_success() -> None:
     with patch("anythink.keys.manager.KeyManager.set_key") as mock_set:
         result = runner.invoke(app, ["keys", "add", "groq"], input="sk-test-key-abc123\n")
@@ -102,13 +107,16 @@ def test_keys_add_empty_key_exits_with_error() -> None:
 def test_keys_add_keychain_error_exits() -> None:
     from anythink.exceptions import KeychainError
 
-    with patch("anythink.keys.manager.KeyManager.set_key",
-               side_effect=KeychainError("fail", user_message="Keychain unavailable")):
+    with patch(
+        "anythink.keys.manager.KeyManager.set_key",
+        side_effect=KeychainError("fail", user_message="Keychain unavailable"),
+    ):
         result = runner.invoke(app, ["keys", "add", "groq"], input="sk-key\n")
     assert result.exit_code != 0
 
 
 # ── keys show ─────────────────────────────────────────────────────────────────
+
 
 def test_keys_show_masks_key() -> None:
     with patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-abcdefghijklmnop"):
@@ -136,9 +144,12 @@ def test_keys_show_short_key_shows_masked() -> None:
 
 # ── keys update ───────────────────────────────────────────────────────────────
 
+
 def test_keys_update_success() -> None:
-    with patch("anythink.keys.manager.KeyManager.has_key", return_value=True), \
-            patch("anythink.keys.manager.KeyManager.set_key") as mock_set:
+    with (
+        patch("anythink.keys.manager.KeyManager.has_key", return_value=True),
+        patch("anythink.keys.manager.KeyManager.set_key") as mock_set,
+    ):
         result = runner.invoke(app, ["keys", "update", "groq"], input="sk-new-key-xyz\n")
     assert result.exit_code == 0
     assert "updated successfully" in result.output
@@ -153,6 +164,7 @@ def test_keys_update_no_existing_key_exits() -> None:
 
 
 # ── keys delete ───────────────────────────────────────────────────────────────
+
 
 def test_keys_delete_with_yes_flag() -> None:
     with patch("anythink.keys.manager.KeyManager.delete_key") as mock_del:
@@ -179,11 +191,16 @@ def test_keys_delete_cancelled() -> None:
 
 # ── keys test ─────────────────────────────────────────────────────────────────
 
+
 def test_keys_test_success() -> None:
     mock_provider = MagicMock()
     mock_provider.test_connection = AsyncMock(return_value=True)
-    with patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-key"), \
-            patch("anythink.providers.registry.ProviderRegistry.instantiate", return_value=mock_provider):
+    with (
+        patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-key"),
+        patch(
+            "anythink.providers.registry.ProviderRegistry.instantiate", return_value=mock_provider
+        ),
+    ):
         result = runner.invoke(app, ["keys", "test", "groq"])
     assert result.exit_code == 0
     assert "working" in result.output.lower()
@@ -192,8 +209,12 @@ def test_keys_test_success() -> None:
 def test_keys_test_failure() -> None:
     mock_provider = MagicMock()
     mock_provider.test_connection = AsyncMock(return_value=False)
-    with patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-key"), \
-            patch("anythink.providers.registry.ProviderRegistry.instantiate", return_value=mock_provider):
+    with (
+        patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-key"),
+        patch(
+            "anythink.providers.registry.ProviderRegistry.instantiate", return_value=mock_provider
+        ),
+    ):
         result = runner.invoke(app, ["keys", "test", "groq"])
     assert result.exit_code != 0
 
@@ -208,14 +229,19 @@ def test_keys_test_no_key_exits() -> None:
 def test_keys_test_provider_load_error_exits() -> None:
     from anythink.exceptions import PluginError
 
-    with patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-key"), \
-            patch("anythink.providers.registry.ProviderRegistry.instantiate",
-                  side_effect=PluginError("no sdk", user_message="SDK not installed")):
+    with (
+        patch("anythink.keys.manager.KeyManager.get_key", return_value="sk-key"),
+        patch(
+            "anythink.providers.registry.ProviderRegistry.instantiate",
+            side_effect=PluginError("no sdk", user_message="SDK not installed"),
+        ),
+    ):
         result = runner.invoke(app, ["keys", "test", "groq"])
     assert result.exit_code != 0
 
 
 # ── model list ────────────────────────────────────────────────────────────────
+
 
 def test_model_list_no_aliases() -> None:
     with patch("anythink.config.models.ModelRegistry.list_all", return_value=[]):
@@ -242,8 +268,13 @@ def test_model_list_shows_vision_flag() -> None:
     from anythink.config.models import ModelAlias
 
     aliases = [
-        ModelAlias(alias="vision-model", provider="openai", model_id="gpt-4o",
-                   context_window=128000, supports_vision=True),
+        ModelAlias(
+            alias="vision-model",
+            provider="openai",
+            model_id="gpt-4o",
+            context_window=128000,
+            supports_vision=True,
+        ),
     ]
     with patch("anythink.config.models.ModelRegistry.list_all", return_value=aliases):
         result = runner.invoke(app, ["model", "list"])
@@ -252,11 +283,15 @@ def test_model_list_shows_vision_flag() -> None:
 
 # ── model add ─────────────────────────────────────────────────────────────────
 
+
 def test_model_add_success() -> None:
-    with patch("anythink.config.models.ModelRegistry.exists", return_value=False), \
-            patch("anythink.config.models.ModelRegistry.add") as mock_add:
+    with (
+        patch("anythink.config.models.ModelRegistry.exists", return_value=False),
+        patch("anythink.config.models.ModelRegistry.add") as mock_add,
+    ):
         result = runner.invoke(
-            app, ["model", "add"],
+            app,
+            ["model", "add"],
             input="mymodel\ngroq\nllama3-8b-8192\n8192\nn\n",
         )
     assert result.exit_code == 0
@@ -277,7 +312,8 @@ def test_model_add_duplicate_alias_exits() -> None:
 def test_model_add_invalid_context_window_exits() -> None:
     with patch("anythink.config.models.ModelRegistry.exists", return_value=False):
         result = runner.invoke(
-            app, ["model", "add"],
+            app,
+            ["model", "add"],
             input="mymodel\ngroq\nllama3\nnot-a-number\nn\n",
         )
     assert result.exit_code != 0
@@ -286,9 +322,12 @@ def test_model_add_invalid_context_window_exits() -> None:
 
 # ── model remove ──────────────────────────────────────────────────────────────
 
+
 def test_model_remove_with_yes_flag() -> None:
-    with patch("anythink.config.models.ModelRegistry.exists", return_value=True), \
-            patch("anythink.config.models.ModelRegistry.remove") as mock_rm:
+    with (
+        patch("anythink.config.models.ModelRegistry.exists", return_value=True),
+        patch("anythink.config.models.ModelRegistry.remove") as mock_rm,
+    ):
         result = runner.invoke(app, ["model", "remove", "mymodel", "--yes"])
     assert result.exit_code == 0
     assert "removed" in result.output
@@ -296,16 +335,20 @@ def test_model_remove_with_yes_flag() -> None:
 
 
 def test_model_remove_confirmed_via_prompt() -> None:
-    with patch("anythink.config.models.ModelRegistry.exists", return_value=True), \
-            patch("anythink.config.models.ModelRegistry.remove"):
+    with (
+        patch("anythink.config.models.ModelRegistry.exists", return_value=True),
+        patch("anythink.config.models.ModelRegistry.remove"),
+    ):
         result = runner.invoke(app, ["model", "remove", "mymodel"], input="y\n")
     assert result.exit_code == 0
     assert "removed" in result.output
 
 
 def test_model_remove_cancelled() -> None:
-    with patch("anythink.config.models.ModelRegistry.exists", return_value=True), \
-            patch("anythink.config.models.ModelRegistry.remove") as mock_rm:
+    with (
+        patch("anythink.config.models.ModelRegistry.exists", return_value=True),
+        patch("anythink.config.models.ModelRegistry.remove") as mock_rm,
+    ):
         result = runner.invoke(app, ["model", "remove", "mymodel"], input="n\n")
     assert result.exit_code == 0
     assert "Cancelled" in result.output
@@ -320,6 +363,7 @@ def test_model_remove_not_found_exits() -> None:
 
 
 # ── plugins ───────────────────────────────────────────────────────────────────
+
 
 def test_plugins_help() -> None:
     result = runner.invoke(app, ["plugins", "--help"])
@@ -348,8 +392,11 @@ def test_plugins_info_found() -> None:
     from anythink.plugins.models import PluginInfo
 
     p = PluginInfo(
-        name="anythink-groq", version="1.0.0", description="Groq provider",
-        author="Dev", entry_point_groups=["anythink.providers"]
+        name="anythink-groq",
+        version="1.0.0",
+        description="Groq provider",
+        author="Dev",
+        entry_point_groups=["anythink.providers"],
     )
     with patch("anythink.plugins.manager.PluginManager.get_plugin", return_value=p):
         result = runner.invoke(app, ["plugins", "info", "anythink-groq"])

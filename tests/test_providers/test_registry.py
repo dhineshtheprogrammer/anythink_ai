@@ -23,7 +23,7 @@ class TestProviderRegistry:
     def setup_method(self) -> None:
         self.registry = ProviderRegistry()
 
-    def _patch_eps(self, entries: list[MagicMock]) -> "patch":
+    def _patch_eps(self, entries: list[MagicMock]) -> patch:
         return patch("anythink.providers.registry.entry_points", return_value=entries)
 
     def test_list_names(self) -> None:
@@ -40,9 +40,8 @@ class TestProviderRegistry:
 
     def test_get_unknown_raises_plugin_error(self) -> None:
         eps = [_make_entry_point("mock", MockProvider)]
-        with self._patch_eps(eps):
-            with pytest.raises(PluginError, match="nonexistent"):
-                self.registry.get("nonexistent")
+        with self._patch_eps(eps), pytest.raises(PluginError, match="nonexistent"):
+            self.registry.get("nonexistent")
 
     def test_instantiate(self) -> None:
         eps = [_make_entry_point("mock", MockProvider)]

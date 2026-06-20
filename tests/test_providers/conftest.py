@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator
-from unittest.mock import AsyncMock
-
-import pytest
+from collections.abc import AsyncIterator
 
 from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk
 

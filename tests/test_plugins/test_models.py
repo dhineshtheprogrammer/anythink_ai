@@ -27,7 +27,9 @@ class TestPluginInfo:
         assert p.homepage == ""
 
     def test_homepage_stored(self) -> None:
-        p = PluginInfo(name="pkg", version="1.0", description="", author="", homepage="https://example.com")
+        p = PluginInfo(
+            name="pkg", version="1.0", description="", author="", homepage="https://example.com"
+        )
         assert p.homepage == "https://example.com"
 
     def test_entry_point_groups_default_empty(self) -> None:
@@ -36,5 +38,7 @@ class TestPluginInfo:
 
     def test_entry_point_groups_stored(self) -> None:
         groups = ["anythink.providers", "anythink.search_backends"]
-        p = PluginInfo(name="pkg", version="1.0", description="", author="", entry_point_groups=groups)
+        p = PluginInfo(
+            name="pkg", version="1.0", description="", author="", entry_point_groups=groups
+        )
         assert p.entry_point_groups == groups

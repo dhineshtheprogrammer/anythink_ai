@@ -8,8 +8,13 @@ from anythink.plugins.manager import PluginManager
 from anythink.plugins.models import PluginInfo
 
 
-def _make_ep(pkg_name: str, group: str, version: str = "1.0.0",
-             summary: str = "A plugin", author: str = "Dev") -> MagicMock:
+def _make_ep(
+    pkg_name: str,
+    group: str,
+    version: str = "1.0.0",
+    summary: str = "A plugin",
+    author: str = "Dev",
+) -> MagicMock:
     """Build a mock EntryPoint with a realistic .dist."""
     metadata = MagicMock()
     metadata.__getitem__ = MagicMock(side_effect=lambda k: pkg_name if k == "Name" else "")
@@ -31,8 +36,10 @@ def _make_ep(pkg_name: str, group: str, version: str = "1.0.0",
 
 def _patch_eps(eps_by_group: dict[str, list[MagicMock]]):
     """Context-manager that patches entry_points() in manager.py."""
+
     def _side_effect(*, group: str) -> list[MagicMock]:
         return eps_by_group.get(group, [])
+
     return patch("anythink.plugins.manager.entry_points", side_effect=_side_effect)
 
 
@@ -54,10 +61,12 @@ class TestListPlugins:
     def test_deduplicates_packages_across_groups(self) -> None:
         ep1 = _make_ep("multi-plugin", "anythink.providers")
         ep2 = _make_ep("multi-plugin", "anythink.search_backends")
-        with _patch_eps({
-            "anythink.providers": [ep1],
-            "anythink.search_backends": [ep2],
-        }):
+        with _patch_eps(
+            {
+                "anythink.providers": [ep1],
+                "anythink.search_backends": [ep2],
+            }
+        ):
             plugins = PluginManager().list_plugins()
         assert len(plugins) == 1
         assert plugins[0].name == "multi-plugin"
@@ -65,10 +74,12 @@ class TestListPlugins:
     def test_tracks_all_groups_for_multi_group_package(self) -> None:
         ep1 = _make_ep("multi-plugin", "anythink.providers")
         ep2 = _make_ep("multi-plugin", "anythink.search_backends")
-        with _patch_eps({
-            "anythink.providers": [ep1],
-            "anythink.search_backends": [ep2],
-        }):
+        with _patch_eps(
+            {
+                "anythink.providers": [ep1],
+                "anythink.search_backends": [ep2],
+            }
+        ):
             plugins = PluginManager().list_plugins()
         groups = plugins[0].entry_point_groups
         assert "anythink.providers" in groups

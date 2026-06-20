@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
-import yaml
 
 from anythink.config.manager import Paths
 from anythink.exceptions import SessionError
@@ -38,7 +35,6 @@ class TestSave:
         assert new_dir.exists()
 
     def test_save_updates_updated_at(self, sm: SessionManager) -> None:
-        from datetime import datetime
         s = _make_session()
         old_ts = s.updated_at
         sm.save(s)
@@ -86,6 +82,7 @@ class TestListSessions:
 
     def test_list_sorted_newest_first(self, sm: SessionManager) -> None:
         import time
+
         s1 = _make_session(name="first")
         sm.save(s1)
         time.sleep(0.01)
@@ -125,6 +122,25 @@ class TestDelete:
         assert sm.list_sessions() == []
 
 
+class TestBookmarkPersistence:
+    def test_bookmarks_round_trip(self, sm: SessionManager) -> None:
+        from anythink.bookmarks.models import Bookmark
+
+        s = _make_session(name="bm-test")
+        s.bookmarks = [Bookmark(turn_index=1, label="insight")]
+        sm.save(s)
+        loaded = sm.load(s.id)
+        assert len(loaded.bookmarks) == 1
+        assert loaded.bookmarks[0].turn_index == 1
+        assert loaded.bookmarks[0].label == "insight"
+
+    def test_no_bookmarks_round_trips_to_empty(self, sm: SessionManager) -> None:
+        s = _make_session(name="no-bm")
+        sm.save(s)
+        loaded = sm.load(s.id)
+        assert loaded.bookmarks == []
+
+
 class TestFindByNameOrId:
     def test_find_by_exact_name(self, sm: SessionManager) -> None:
         s = _make_session(name="my-chat")
@@ -140,9 +156,7 @@ class TestFindByNameOrId:
         assert found is not None
         assert found.id == s.id
 
-    def test_find_exact_name_takes_precedence_over_id_prefix(
-        self, sm: SessionManager
-    ) -> None:
+    def test_find_exact_name_takes_precedence_over_id_prefix(self, sm: SessionManager) -> None:
         s1 = _make_session(name="abc12345")
         sm.save(s1)
         s2 = _make_session(name="other")

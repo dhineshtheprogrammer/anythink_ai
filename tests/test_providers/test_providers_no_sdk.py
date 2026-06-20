@@ -24,14 +24,15 @@ from anythink.providers.ollama import OllamaProvider
 from anythink.providers.openai import OpenAIProvider
 from tests.test_providers.conftest import make_messages
 
-
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _patch_no_sdk(module_name: str):
     return patch.dict("sys.modules", {module_name: None})
 
 
 # ── Cohere ────────────────────────────────────────────────────────────────────
+
 
 class TestCohereProvider:
     def test_metadata(self) -> None:
@@ -50,7 +51,9 @@ class TestCohereProvider:
     @pytest.mark.asyncio
     async def test_list_models_falls_back(self) -> None:
         p = CohereProvider(api_key="key")
-        with patch.object(p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="cohere")):
+        with patch.object(
+            p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="cohere")
+        ):
             models = await p.list_models()
         assert len(models) > 0
 
@@ -68,6 +71,7 @@ class TestCohereProvider:
 
     def test_build_chat_history_extracts_last_user_msg(self) -> None:
         from anythink.providers.base import ChatMessage
+
         p = CohereProvider(api_key="key")
         messages = [
             ChatMessage(role="user", content="First"),
@@ -89,6 +93,7 @@ class TestCohereProvider:
 
 # ── Gemini ────────────────────────────────────────────────────────────────────
 
+
 class TestGeminiProvider:
     def test_metadata(self) -> None:
         p = GeminiProvider(api_key="key")
@@ -100,13 +105,17 @@ class TestGeminiProvider:
     def test_missing_sdk_configure_raises(self) -> None:
         p = GeminiProvider(api_key="key")
         with _patch_no_sdk("google.generativeai"):
-            with pytest.raises(ProviderUnavailableError, match="google-generativeai SDK not installed"):
+            with pytest.raises(
+                ProviderUnavailableError, match="google-generativeai SDK not installed"
+            ):
                 p._configure()
 
     @pytest.mark.asyncio
     async def test_list_models_falls_back(self) -> None:
         p = GeminiProvider(api_key="key")
-        with patch.object(p, "_configure", side_effect=ProviderUnavailableError("no sdk", provider="gemini")):
+        with patch.object(
+            p, "_configure", side_effect=ProviderUnavailableError("no sdk", provider="gemini")
+        ):
             models = await p.list_models()
         assert len(models) > 0
 
@@ -120,14 +129,20 @@ class TestGeminiProvider:
     async def test_stream_chat_raises_on_missing_sdk(self) -> None:
         p = GeminiProvider(api_key="key")
         with _patch_no_sdk("google.generativeai"):
-            with pytest.raises(ProviderUnavailableError, match="google-generativeai SDK not installed"):
+            with pytest.raises(
+                ProviderUnavailableError, match="google-generativeai SDK not installed"
+            ):
                 async for _ in p.stream_chat(make_messages("Hi"), "gemini-2.0-flash"):
                     pass
 
     def test_get_system_instruction(self) -> None:
         from anythink.providers.base import ChatMessage
+
         p = GeminiProvider(api_key="key")
-        messages = [ChatMessage(role="system", content="Be brief."), ChatMessage(role="user", content="Hi")]
+        messages = [
+            ChatMessage(role="system", content="Be brief."),
+            ChatMessage(role="user", content="Hi"),
+        ]
         assert p._get_system_instruction(messages) == "Be brief."
 
     def test_get_system_instruction_none_when_absent(self) -> None:
@@ -136,6 +151,7 @@ class TestGeminiProvider:
 
     def test_build_contents_skips_system(self) -> None:
         from anythink.providers.base import ChatMessage
+
         p = GeminiProvider(api_key="key")
         messages = [ChatMessage(role="system", content="x"), ChatMessage(role="user", content="Hi")]
         contents = p._build_contents(messages)
@@ -144,8 +160,11 @@ class TestGeminiProvider:
 
     def test_build_contents_with_image_and_text(self) -> None:
         from anythink.providers.base import ChatMessage, ImagePart, TextPart
+
         p = GeminiProvider(api_key="key")
-        messages = [ChatMessage(role="user", content=[TextPart("Look:"), ImagePart(b"data", "image/jpeg")])]
+        messages = [
+            ChatMessage(role="user", content=[TextPart("Look:"), ImagePart(b"data", "image/jpeg")])
+        ]
         contents = p._build_contents(messages)
         parts = contents[0]["parts"]
         assert any("text" in part for part in parts)
@@ -153,6 +172,7 @@ class TestGeminiProvider:
 
     def test_build_contents_assistant_role(self) -> None:
         from anythink.providers.base import ChatMessage
+
         p = GeminiProvider(api_key="key")
         messages = [ChatMessage(role="assistant", content="Reply")]
         contents = p._build_contents(messages)
@@ -160,6 +180,7 @@ class TestGeminiProvider:
 
 
 # ── Mistral ───────────────────────────────────────────────────────────────────
+
 
 class TestMistralProvider:
     def test_metadata(self) -> None:
@@ -178,7 +199,9 @@ class TestMistralProvider:
     @pytest.mark.asyncio
     async def test_list_models_falls_back(self) -> None:
         p = MistralProvider(api_key="key")
-        with patch.object(p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="mistral")):
+        with patch.object(
+            p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="mistral")
+        ):
             models = await p.list_models()
         assert len(models) > 0
 
@@ -206,6 +229,7 @@ class TestMistralProvider:
 
 # ── Groq (additional coverage) ────────────────────────────────────────────────
 
+
 class TestGroqBuildMessages:
     def test_build_messages_plain_text(self) -> None:
         p = GroqProvider(api_key="sk-test")
@@ -214,7 +238,8 @@ class TestGroqBuildMessages:
         assert result[0] == {"role": "user", "content": "Hello"}
 
     def test_build_messages_multipart_extracts_text(self) -> None:
-        from anythink.providers.base import ChatMessage, TextPart, ImagePart
+        from anythink.providers.base import ChatMessage, ImagePart, TextPart
+
         p = GroqProvider(api_key="sk-test")
         msg = ChatMessage(role="user", content=[TextPart("Hi"), ImagePart(b"img", "image/png")])
         result = p._build_messages([msg])
@@ -223,6 +248,7 @@ class TestGroqBuildMessages:
 
 # ── OpenAI (additional coverage) ─────────────────────────────────────────────
 
+
 class TestOpenAIBuildMessages:
     def test_build_messages_plain_text(self) -> None:
         p = OpenAIProvider(api_key="sk-test")
@@ -230,7 +256,8 @@ class TestOpenAIBuildMessages:
         assert result[0] == {"role": "user", "content": "Hello"}
 
     def test_build_messages_multipart(self) -> None:
-        from anythink.providers.base import ChatMessage, TextPart, ImagePart
+        from anythink.providers.base import ChatMessage, ImagePart, TextPart
+
         p = OpenAIProvider(api_key="sk-test")
         msg = ChatMessage(role="user", content=[TextPart("Hi"), ImagePart(b"\x89PNG", "image/png")])
         result = p._build_messages([msg])
@@ -241,10 +268,19 @@ class TestOpenAIBuildMessages:
 
 # ── All providers: instantiation without args ─────────────────────────────────
 
+
 def test_all_providers_instantiate_without_args() -> None:
     """All providers must be constructable with zero arguments."""
-    for cls in (GroqProvider, OpenAIProvider, AnthropicProvider, GeminiProvider,
-                MistralProvider, CohereProvider, OllamaProvider, LMStudioProvider):
+    for cls in (
+        GroqProvider,
+        OpenAIProvider,
+        AnthropicProvider,
+        GeminiProvider,
+        MistralProvider,
+        CohereProvider,
+        OllamaProvider,
+        LMStudioProvider,
+    ):
         p = cls()
         assert p.name  # non-empty string
 

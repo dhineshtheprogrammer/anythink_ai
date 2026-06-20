@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from anythink.bookmarks.models import Bookmark
+from anythink.branch.models import BranchInfo
 from anythink.providers.base import ChatMessage, ImagePart, TextPart
 
 
@@ -20,11 +22,13 @@ def _msg_to_dict(msg: ChatMessage) -> dict[str, Any]:
             if isinstance(part, TextPart):
                 parts.append({"type": "text", "text": part.text})
             elif isinstance(part, ImagePart):
-                parts.append({
-                    "type": "image",
-                    "data": base64.b64encode(part.data).decode(),
-                    "mime_type": part.mime_type,
-                })
+                parts.append(
+                    {
+                        "type": "image",
+                        "data": base64.b64encode(part.data).decode(),
+                        "mime_type": part.mime_type,
+                    }
+                )
         content = parts
     return {
         "role": msg.role,
@@ -75,6 +79,9 @@ class Session:
     name: str = ""
     created_at: datetime = field(default_factory=datetime.utcnow)
     updated_at: datetime = field(default_factory=datetime.utcnow)
+    bookmarks: list[Bookmark] = field(default_factory=list)
+    # Non-main branches; "main" branch is represented by top-level `messages`
+    branches: dict[str, BranchInfo] = field(default_factory=dict)
 
     @classmethod
     def new(cls, provider: str, model_id: str, name: str = "") -> Session:
@@ -96,6 +103,8 @@ class Session:
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
             "messages": [_msg_to_dict(m) for m in self.messages],
+            "bookmarks": [b.to_dict() for b in self.bookmarks],
+            "branches": {k: v.to_dict() for k, v in self.branches.items()},
         }
 
     @classmethod
@@ -104,6 +113,11 @@ class Session:
             val = data.get(key)
             return datetime.fromisoformat(val) if val else datetime.utcnow()
 
+        raw_branches = data.get("branches", {})
+        branches: dict[str, BranchInfo] = {}
+        for bname, bdata in raw_branches.items():
+            bi = BranchInfo.from_dict({**bdata, "name": bname})
+            branches[bname] = bi
         return cls(
             id=data["id"],
             provider=data.get("provider", ""),
@@ -112,4 +126,6 @@ class Session:
             created_at=_parse_dt("created_at"),
             updated_at=_parse_dt("updated_at"),
             messages=[_msg_from_dict(m) for m in data.get("messages", [])],
+            bookmarks=[Bookmark.from_dict(b) for b in data.get("bookmarks", [])],
+            branches=branches,
         )

@@ -80,10 +80,12 @@ class TestOllamaProvider:
         httpx_mock.add_response(
             method="GET",
             url="http://localhost:11434/api/tags",
-            json={"models": [
-                {"name": "llama3:latest", "details": {"context_length": 8192}},
-                {"name": "mistral:latest", "details": {}},
-            ]},
+            json={
+                "models": [
+                    {"name": "llama3:latest", "details": {"context_length": 8192}},
+                    {"name": "mistral:latest", "details": {}},
+                ]
+            },
         )
         p = OllamaProvider()
         models = await p.list_models()
@@ -94,6 +96,7 @@ class TestOllamaProvider:
     @pytest.mark.asyncio
     async def test_list_models_connect_error(self, httpx_mock: HTTPXMock) -> None:
         import httpx
+
         httpx_mock.add_exception(httpx.ConnectError("refused"))
         p = OllamaProvider()
         with pytest.raises(ProviderUnavailableError, match="Cannot connect"):
@@ -112,6 +115,7 @@ class TestOllamaProvider:
     @pytest.mark.asyncio
     async def test_test_connection_false_on_error(self, httpx_mock: HTTPXMock) -> None:
         import httpx
+
         httpx_mock.add_exception(httpx.ConnectError("refused"))
         p = OllamaProvider()
         assert await p.test_connection() is False
@@ -151,6 +155,7 @@ class TestOllamaProvider:
     @pytest.mark.asyncio
     async def test_stream_chat_connect_error(self, httpx_mock: HTTPXMock) -> None:
         import httpx
+
         httpx_mock.add_exception(httpx.ConnectError("refused"))
         p = OllamaProvider()
         with pytest.raises(ProviderUnavailableError, match="Cannot connect"):

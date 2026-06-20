@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, AsyncIterator, Literal
+from typing import Any, Literal
 
 
 @dataclass
@@ -51,7 +52,7 @@ class StreamChunk:
 
     text: str
     finish_reason: str | None = None  # "stop", "length", "tool_calls", None (mid-stream)
-    usage: TokenUsage | None = None   # present only in the final chunk (most providers)
+    usage: TokenUsage | None = None  # present only in the final chunk (most providers)
 
 
 @dataclass
@@ -72,7 +73,7 @@ class BaseProvider(ABC):
     (App orchestrator) passes keys at construction time.
     """
 
-    name: str        # e.g. "groq"
+    name: str  # e.g. "groq"
     display_name: str  # e.g. "Groq"
 
     def __init__(
@@ -84,7 +85,7 @@ class BaseProvider(ABC):
         self._base_url = base_url
 
     @abstractmethod
-    async def stream_chat(
+    def stream_chat(
         self,
         messages: list[ChatMessage],
         model: str,
@@ -94,8 +95,9 @@ class BaseProvider(ABC):
     ) -> AsyncIterator[StreamChunk]:
         """Stream chat completion tokens as they arrive.
 
-        Yields StreamChunk objects. The final chunk has finish_reason set
-        and may include TokenUsage when the provider supports it.
+        Implementations are async generators, so the declared return type is
+        ``AsyncIterator`` (not a coroutine). Yields StreamChunk objects; the
+        final chunk has finish_reason set and may include TokenUsage.
         """
         ...  # pragma: no cover
 

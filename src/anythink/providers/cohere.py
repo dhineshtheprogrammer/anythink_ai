@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderUnavailableError, RateLimitError
+from anythink.exceptions import (
+    AuthenticationError,
+    ModelNotFoundError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
 from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TokenUsage
 
+if TYPE_CHECKING:
+    import cohere
 
 _KNOWN_MODELS: list[ModelInfo] = [
     ModelInfo("command-r-plus", "Command R+", 128_000, supports_function_calling=True),
@@ -20,25 +28,27 @@ class CohereProvider(BaseProvider):
     name = "cohere"
     display_name = "Cohere"
 
-    def _client(self) -> "cohere.AsyncClient":
+    def _client(self) -> cohere.AsyncClient:
         try:
             import cohere
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "cohere SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[cohere]",
-            )
+            ) from e
         return cohere.AsyncClient(api_key=self._api_key or "")
 
-    def _build_chat_history(self, messages: list[ChatMessage]) -> tuple[str, list[dict]]:
+    def _build_chat_history(self, messages: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
         """Separate the last user message and build Cohere chat history format."""
-        history: list[dict] = []
+        history: list[dict[str, Any]] = []
         last_user_msg = ""
         role_map = {"user": "USER", "assistant": "CHATBOT", "system": "SYSTEM"}
 
         for i, msg in enumerate(messages):
-            text = self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content
+            text = (
+                self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content
+            )
             role = role_map.get(msg.role, "USER")
             if i == len(messages) - 1 and msg.role == "user":
                 last_user_msg = text
@@ -59,7 +69,6 @@ class CohereProvider(BaseProvider):
         message, chat_history = self._build_chat_history(messages)
 
         try:
-            import cohere
             stream = client.chat_stream(
                 model=model,
                 message=message,
@@ -80,12 +89,6 @@ class CohereProvider(BaseProvider):
                             total_tokens=(t.input_tokens or 0) + (t.output_tokens or 0),
                         )
                     yield StreamChunk(text="", finish_reason="stop", usage=usage)
-        except ImportError:
-            raise ProviderUnavailableError(
-                "cohere SDK not installed",
-                provider=self.name,
-                user_message="Install with: pip install anythink[cohere]",
-            )
         except Exception as e:
             err = str(e).lower()
             if "unauthorized" in err or "api key" in err:

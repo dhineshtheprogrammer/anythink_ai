@@ -66,6 +66,6 @@ class CommandRegistry:
             try:
                 register_fn = ep.load()
                 register_fn(registry)
-            except Exception:
-                pass  # skip broken plugins — don't crash startup
+            except Exception:  # nosec B110 - skip broken plugins, don't crash startup
+                pass
         return registry

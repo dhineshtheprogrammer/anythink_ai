@@ -34,7 +34,9 @@ class TestOpenAIProvider:
     @pytest.mark.asyncio
     async def test_list_models_falls_back(self) -> None:
         p = OpenAIProvider(api_key="sk-test")
-        with patch.object(p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="openai")):
+        with patch.object(
+            p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="openai")
+        ):
             models = await p.list_models()
         assert len(models) > 0
 

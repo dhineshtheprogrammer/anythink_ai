@@ -6,12 +6,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from anythink.exceptions import AuthenticationError, ProviderUnavailableError, RateLimitError
+from anythink.exceptions import ProviderUnavailableError
 from anythink.providers.groq import GroqProvider
 from tests.test_providers.conftest import make_messages
 
 
-def _make_chunk(text: str, finish_reason: str | None = None, usage: dict | None = None) -> MagicMock:
+def _make_chunk(
+    text: str, finish_reason: str | None = None, usage: dict | None = None
+) -> MagicMock:
     chunk = MagicMock()
     chunk.choices = [MagicMock()]
     chunk.choices[0].delta.content = text
@@ -31,6 +33,7 @@ async def _async_iter(items: list) -> AsyncMock:
     async def _gen():
         for item in items:
             yield item
+
     return _gen()
 
 
@@ -61,7 +64,9 @@ class TestGroqProvider:
     @pytest.mark.asyncio
     async def test_list_models_falls_back_on_error(self) -> None:
         p = GroqProvider(api_key="sk-test")
-        with patch.object(p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="groq")):
+        with patch.object(
+            p, "_client", side_effect=ProviderUnavailableError("no sdk", provider="groq")
+        ):
             models = await p.list_models()
         assert len(models) > 0
 

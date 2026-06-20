@@ -31,7 +31,9 @@ class ProviderRegistry:
             except Exception as exc:
                 raise PluginError(
                     f"Failed to load provider '{ep.name}' from entry point '{ep.value}': {exc}",
-                    user_message=f"Provider plugin '{ep.name}' failed to load. Try reinstalling it.",
+                    user_message=(
+                        f"Provider plugin '{ep.name}' failed to load. Try reinstalling it."
+                    ),
                 ) from exc
 
         self._cache = providers
@@ -44,7 +46,9 @@ class ProviderRegistry:
             available = ", ".join(sorted(providers)) or "(none)"
             raise PluginError(
                 f"Unknown provider '{name}'. Available: {available}",
-                user_message=f"Provider '{name}' is not installed. Available providers: {available}",
+                user_message=(
+                    f"Provider '{name}' is not installed. Available providers: {available}"
+                ),
             )
         return providers[name]
 

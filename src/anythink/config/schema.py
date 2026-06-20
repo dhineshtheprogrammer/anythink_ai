@@ -21,6 +21,21 @@ class AppConfig:
     local_servers: dict[str, str] = field(default_factory=dict)
     plugin_settings: dict[str, Any] = field(default_factory=dict)
 
+    # --- V2 fields (safe defaults preserve V1 behavior) ---
+    ui_mode: str = "simple"  # "simple" | "dashboard"
+    active_rag_index: str | None = None
+    embedding_backend: str = "local"  # "local" | "api"
+    browse_autonomy: str = "ask"  # "ask" | "auto"
+    browse_mode: str = "http"  # "http" | "headless"
+    exec_mode: str = "ask"  # "ask" | "auto"
+    voice_model: str = "base"  # tiny|base|small|medium|large|turbo
+    voice_language: str | None = None  # None = auto-detect
+    mouse_enabled: bool = True
+    notifications: dict[str, bool] = field(default_factory=dict)  # per-type toggles
+
     VALID_THEMES: frozenset[str] = field(
-        default=frozenset({"midnight", "aurora", "ember", "arctic"}), init=False, repr=False, compare=False
+        default=frozenset({"midnight", "aurora", "ember", "arctic"}),
+        init=False,
+        repr=False,
+        compare=False,
     )

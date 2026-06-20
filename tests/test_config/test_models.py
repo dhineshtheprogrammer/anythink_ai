@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 
 import pytest
 
@@ -12,7 +11,9 @@ from anythink.config.models import ModelAlias, ModelRegistry
 from anythink.exceptions import ConfigError
 
 
-def _make_alias(alias: str = "google2", provider: str = "gemini", model_id: str = "gemini-2.0-flash") -> ModelAlias:
+def _make_alias(
+    alias: str = "google2", provider: str = "gemini", model_id: str = "gemini-2.0-flash"
+) -> ModelAlias:
     return ModelAlias(alias=alias, provider=provider, model_id=model_id, context_window=1_000_000)
 
 
@@ -86,7 +87,7 @@ class TestModelRegistry:
         registry = ModelRegistry(xdg_dirs.models_file)
         registry._load()  # initialise cache
         assert registry._dirty is False
-        registry.save()   # should return immediately without writing
+        registry.save()  # should return immediately without writing
         assert not xdg_dirs.models_file.exists()
 
     def test_load_invalid_yaml_raises(self, xdg_dirs: Paths) -> None:

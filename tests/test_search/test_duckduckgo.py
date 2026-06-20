@@ -47,12 +47,16 @@ class TestDuckDuckGoSearch:
                 await ddg.search("python")
 
     async def test_search_returns_results(self) -> None:
-        raw = [{"title": "PEP 8", "href": "https://peps.python.org/pep-0008/", "body": "Style guide."}]
+        raw = [
+            {"title": "PEP 8", "href": "https://peps.python.org/pep-0008/", "body": "Style guide."}
+        ]
         ddg = DuckDuckGoSearch()
         mock_module = _make_ddgs_module(raw)
 
-        with patch.dict("sys.modules", {"duckduckgo_search": mock_module}), \
-                patch.object(ddg, "is_available", return_value=True):
+        with (
+            patch.dict("sys.modules", {"duckduckgo_search": mock_module}),
+            patch.object(ddg, "is_available", return_value=True),
+        ):
             results = await ddg.search("pep 8", max_results=1)
 
         assert len(results) == 1
@@ -63,16 +67,20 @@ class TestDuckDuckGoSearch:
 
     async def test_search_raises_search_error_on_exception(self) -> None:
         ddg = DuckDuckGoSearch()
-        with patch.object(ddg, "is_available", return_value=True), \
-                patch.object(ddg, "_sync_search", side_effect=RuntimeError("network error")):
+        with (
+            patch.object(ddg, "is_available", return_value=True),
+            patch.object(ddg, "_sync_search", side_effect=RuntimeError("network error")),
+        ):
             with pytest.raises(SearchError, match="DuckDuckGo search failed"):
                 await ddg.search("query")
 
     async def test_search_re_raises_search_error_directly(self) -> None:
         ddg = DuckDuckGoSearch()
         original = SearchError("already a search error", user_message="already a search error")
-        with patch.object(ddg, "is_available", return_value=True), \
-                patch.object(ddg, "_sync_search", side_effect=original):
+        with (
+            patch.object(ddg, "is_available", return_value=True),
+            patch.object(ddg, "_sync_search", side_effect=original),
+        ):
             with pytest.raises(SearchError, match="already a search error"):
                 await ddg.search("query")
 

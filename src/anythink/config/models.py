@@ -34,8 +34,10 @@ class ModelAlias:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ModelAlias":
-        added_at = datetime.fromisoformat(data["added_at"]) if "added_at" in data else datetime.utcnow()
+    def from_dict(cls, data: dict[str, Any]) -> ModelAlias:
+        added_at = (
+            datetime.fromisoformat(data["added_at"]) if "added_at" in data else datetime.utcnow()
+        )
         return cls(
             alias=data["alias"],
             provider=data["provider"],
@@ -63,11 +65,13 @@ class ModelRegistry:
             return self._aliases
 
         try:
-            raw: list[dict] = yaml.safe_load(self._path.read_text()) or []
+            raw: list[dict[str, Any]] = yaml.safe_load(self._path.read_text()) or []
         except yaml.YAMLError as e:
             raise ConfigError(f"Failed to parse models.yaml: {e}") from e
 
-        self._aliases = {entry["alias"]: ModelAlias.from_dict(entry) for entry in raw if "alias" in entry}
+        self._aliases = {
+            entry["alias"]: ModelAlias.from_dict(entry) for entry in raw if "alias" in entry
+        }
         return self._aliases
 
     def save(self) -> None:

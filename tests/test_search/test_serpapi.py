@@ -18,6 +18,7 @@ def _make_mock_client(json_data: dict, status_code: int = 200) -> MagicMock:
     mock_response.json = MagicMock(return_value=json_data)
     if status_code != 200:
         import httpx
+
         mock_response.raise_for_status.side_effect = httpx.HTTPStatusError(
             "error", request=MagicMock(), response=MagicMock(status_code=status_code)
         )
@@ -67,8 +68,7 @@ class TestSerpAPISearch:
         backend = SerpAPISearch(api_key="key")
         data = {
             "organic_results": [
-                {"title": f"R{i}", "link": f"https://{i}.com", "snippet": ""}
-                for i in range(10)
+                {"title": f"R{i}", "link": f"https://{i}.com", "snippet": ""} for i in range(10)
             ]
         }
         mock_client = _make_mock_client(data)
@@ -105,9 +105,7 @@ class TestSerpAPISearch:
 
         backend = SerpAPISearch(api_key="key")
         mock_client = AsyncMock()
-        mock_client.get = AsyncMock(
-            side_effect=httpx.RequestError("timeout", request=MagicMock())
-        )
+        mock_client.get = AsyncMock(side_effect=httpx.RequestError("timeout", request=MagicMock()))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=False)
 

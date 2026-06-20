@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-import pytest
-
 from anythink.config.manager import ConfigManager, Paths, validate_config
 from anythink.config.schema import AppConfig
 from anythink.exceptions import ConfigError
@@ -52,6 +50,29 @@ class TestValidateConfig:
     def test_multiple_errors_returned(self) -> None:
         errors = validate_config({"active_theme": "bad", "context_warning_yellow": -0.1})
         assert len(errors) == 2
+
+    def test_valid_v2_enum_fields_no_errors(self) -> None:
+        errors = validate_config(
+            {
+                "ui_mode": "dashboard",
+                "embedding_backend": "api",
+                "browse_autonomy": "auto",
+                "browse_mode": "headless",
+                "exec_mode": "auto",
+                "voice_model": "turbo",
+            }
+        )
+        assert errors == []
+
+    def test_invalid_ui_mode_returns_error(self) -> None:
+        errors = validate_config({"ui_mode": "fullscreen"})
+        assert len(errors) == 1
+        assert "ui_mode" in str(errors[0])
+
+    def test_invalid_voice_model_returns_error(self) -> None:
+        errors = validate_config({"voice_model": "gigantic"})
+        assert len(errors) == 1
+        assert "voice_model" in str(errors[0])
 
 
 class TestConfigManager:
@@ -117,18 +138,72 @@ class TestConfigManager:
         loaded = config_manager.load()
         assert loaded.plugin_settings == {"myplugin": {"key": "val"}}
 
-    def test_load_invalid_local_servers_falls_back_to_empty(self, config_manager: ConfigManager) -> None:
+    def test_load_invalid_local_servers_falls_back_to_empty(
+        self, config_manager: ConfigManager
+    ) -> None:
         import yaml
+
         config_manager.paths.config_file.write_text(yaml.dump({"local_servers": "not-a-dict"}))
         loaded = config_manager.load()
         assert loaded.local_servers == {}
 
-
-    def test_load_invalid_plugin_settings_falls_back_to_empty(self, config_manager: ConfigManager) -> None:
+    def test_load_invalid_plugin_settings_falls_back_to_empty(
+        self, config_manager: ConfigManager
+    ) -> None:
         import yaml
+
         config_manager.paths.config_file.write_text(yaml.dump({"plugin_settings": "not-a-dict"}))
         loaded = config_manager.load()
         assert loaded.plugin_settings == {}
+
+    def test_v2_defaults_preserve_v1_behavior(self, config_manager: ConfigManager) -> None:
+        config = config_manager.load()
+        assert config.ui_mode == "simple"
+        assert config.active_rag_index is None
+        assert config.embedding_backend == "local"
+        assert config.browse_autonomy == "ask"
+        assert config.browse_mode == "http"
+        assert config.exec_mode == "ask"
+        assert config.voice_model == "base"
+        assert config.voice_language is None
+        assert config.mouse_enabled is True
+        assert config.notifications == {}
+
+    def test_v2_fields_roundtrip(self, config_manager: ConfigManager) -> None:
+        original = AppConfig(
+            ui_mode="dashboard",
+            active_rag_index="my-project",
+            embedding_backend="api",
+            browse_autonomy="auto",
+            browse_mode="headless",
+            exec_mode="auto",
+            voice_model="turbo",
+            voice_language="en",
+            mouse_enabled=False,
+            notifications={"rag_build": True, "slow_response": False},
+        )
+        config_manager.save(original)
+        loaded = config_manager.load()
+
+        assert loaded.ui_mode == "dashboard"
+        assert loaded.active_rag_index == "my-project"
+        assert loaded.embedding_backend == "api"
+        assert loaded.browse_autonomy == "auto"
+        assert loaded.browse_mode == "headless"
+        assert loaded.exec_mode == "auto"
+        assert loaded.voice_model == "turbo"
+        assert loaded.voice_language == "en"
+        assert loaded.mouse_enabled is False
+        assert loaded.notifications == {"rag_build": True, "slow_response": False}
+
+    def test_load_invalid_notifications_falls_back_to_empty(
+        self, config_manager: ConfigManager
+    ) -> None:
+        import yaml
+
+        config_manager.paths.config_file.write_text(yaml.dump({"notifications": "not-a-dict"}))
+        loaded = config_manager.load()
+        assert loaded.notifications == {}
 
 
 class TestResolvePathsWithoutXdg:
@@ -138,12 +213,16 @@ class TestResolvePathsWithoutXdg:
         monkeypatch.delenv("XDG_STATE_HOME", raising=False)
         monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
         from anythink.config.manager import _resolve_paths
+
         paths = _resolve_paths()
         assert ".config" in str(paths.config_dir) or "anythink" in str(paths.config_dir)
         assert "anythink" in str(paths.config_dir)
 
-    def test_paths_use_xdg_when_env_set(self, monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory) -> None:
+    def test_paths_use_xdg_when_env_set(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: pytest.TempPathFactory
+    ) -> None:
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
         from anythink.config.manager import _resolve_paths
+
         paths = _resolve_paths()
         assert str(tmp_path / "cfg") in str(paths.config_dir)

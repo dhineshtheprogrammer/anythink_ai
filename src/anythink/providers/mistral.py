@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
-import httpx
-
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderUnavailableError, RateLimitError
+from anythink.exceptions import (
+    AuthenticationError,
+    ModelNotFoundError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
 from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TokenUsage
 
+if TYPE_CHECKING:
+    import mistralai
 
 _KNOWN_MODELS: list[ModelInfo] = [
     ModelInfo("mistral-large-latest", "Mistral Large", 128_000, supports_function_calling=True),
@@ -22,22 +28,26 @@ class MistralProvider(BaseProvider):
     name = "mistral"
     display_name = "Mistral"
 
-    def _client(self) -> "mistralai.Mistral":
+    def _client(self) -> mistralai.Mistral:
         try:
             import mistralai
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "mistralai SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[mistral]",
-            )
+            ) from e
         return mistralai.Mistral(api_key=self._api_key or "")
 
-    def _build_messages(self, messages: list[ChatMessage]) -> list[dict]:
+    def _build_messages(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
         return [
             {
                 "role": msg.role,
-                "content": self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content,
+                "content": (
+                    self._content_to_text(msg.content)
+                    if isinstance(msg.content, list)
+                    else msg.content
+                ),
             }
             for msg in messages
         ]
@@ -51,7 +61,7 @@ class MistralProvider(BaseProvider):
         temperature: float = 0.7,
     ) -> AsyncIterator[StreamChunk]:
         client = self._client()
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(messages),
             "temperature": temperature,
@@ -60,7 +70,6 @@ class MistralProvider(BaseProvider):
             kwargs["max_tokens"] = max_tokens
 
         try:
-            import mistralai
             stream = await client.chat.stream_async(**kwargs)
             async for event in stream:
                 chunk = event.data
@@ -76,13 +85,11 @@ class MistralProvider(BaseProvider):
                         completion_tokens=chunk.usage.completion_tokens,
                         total_tokens=chunk.usage.total_tokens,
                     )
-                yield StreamChunk(text=text, finish_reason=str(finish_reason) if finish_reason else None, usage=usage)
-        except ImportError:
-            raise ProviderUnavailableError(
-                "mistralai SDK not installed",
-                provider=self.name,
-                user_message="Install with: pip install anythink[mistral]",
-            )
+                yield StreamChunk(
+                    text=text,
+                    finish_reason=str(finish_reason) if finish_reason else None,
+                    usage=usage,
+                )
         except Exception as e:
             err = str(e).lower()
             if "401" in err or "unauthorized" in err or "api key" in err:

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import subprocess
+import subprocess  # nosec B404 - used only to shell out to pip with fixed, list-form args
 import sys
 from importlib.metadata import entry_points
+from typing import Any
 
 from anythink.plugins.models import PluginInfo
 
@@ -27,16 +28,17 @@ class PluginManager:
                 if ep.dist is None:
                     continue
                 dist = ep.dist
-                name: str = dist.metadata["Name"]
+                meta: Any = dist.metadata
+                name: str = meta["Name"]
 
                 if name not in seen:
                     seen[name] = PluginInfo(
                         name=name,
                         version=dist.version,
-                        description=dist.metadata.get("Summary", ""),
-                        author=dist.metadata.get("Author", ""),
+                        description=meta.get("Summary", ""),
+                        author=meta.get("Author", ""),
                         entry_point_groups=[group],
-                        homepage=dist.metadata.get("Home-page", ""),
+                        homepage=meta.get("Home-page", ""),
                     )
                 elif group not in seen[name].entry_point_groups:
                     seen[name].entry_point_groups.append(group)
@@ -52,7 +54,7 @@ class PluginManager:
 
     def install(self, package_name: str) -> tuple[bool, str]:
         """Install *package_name* via pip. Returns (success, combined output)."""
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - args are list-form; package_name is user-supplied
             [sys.executable, "-m", "pip", "install", package_name],
             capture_output=True,
             text=True,
@@ -62,7 +64,7 @@ class PluginManager:
 
     def remove(self, package_name: str) -> tuple[bool, str]:
         """Uninstall *package_name* via pip. Returns (success, combined output)."""
-        result = subprocess.run(
+        result = subprocess.run(  # nosec B603 - args are list-form; package_name is user-supplied
             [sys.executable, "-m", "pip", "uninstall", "-y", package_name],
             capture_output=True,
             text=True,

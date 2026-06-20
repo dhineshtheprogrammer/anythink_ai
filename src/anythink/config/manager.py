@@ -50,8 +50,27 @@ class Paths:
     def logs_dir(self) -> Path:
         return self.state_dir / "logs"
 
+    @property
+    def rag_dir(self) -> Path:
+        """YAML metadata for named RAG indexes."""
+        return self.data_dir / "rag"
+
+    @property
+    def rag_cache_dir(self) -> Path:
+        """Persisted vector stores (binary blobs)."""
+        return self.cache_dir / "rag"
+
     def ensure_dirs(self) -> None:
-        for d in (self.config_dir, self.data_dir, self.state_dir, self.cache_dir, self.sessions_dir, self.logs_dir):
+        for d in (
+            self.config_dir,
+            self.data_dir,
+            self.state_dir,
+            self.cache_dir,
+            self.sessions_dir,
+            self.logs_dir,
+            self.rag_dir,
+            self.rag_cache_dir,
+        ):
             d.mkdir(parents=True, exist_ok=True)
 
 
@@ -72,6 +91,16 @@ def _resolve_paths() -> Paths:
 
 _VALID_THEMES = frozenset({"midnight", "aurora", "ember", "arctic"})
 
+# V2 enumerated config fields: field name -> allowed values.
+_ENUM_FIELDS: dict[str, frozenset[str]] = {
+    "ui_mode": frozenset({"simple", "dashboard"}),
+    "embedding_backend": frozenset({"local", "api"}),
+    "browse_autonomy": frozenset({"ask", "auto"}),
+    "browse_mode": frozenset({"http", "headless"}),
+    "exec_mode": frozenset({"ask", "auto"}),
+    "voice_model": frozenset({"tiny", "base", "small", "medium", "large", "turbo"}),
+}
+
 
 def validate_config(raw: dict[str, Any]) -> list[ConfigError]:
     """Validate raw config dict and return a list of errors (never raises)."""
@@ -79,7 +108,9 @@ def validate_config(raw: dict[str, Any]) -> list[ConfigError]:
 
     theme = raw.get("active_theme", "midnight")
     if theme not in _VALID_THEMES:
-        errors.append(ConfigError(f"Invalid theme '{theme}'. Valid themes: {sorted(_VALID_THEMES)}"))
+        errors.append(
+            ConfigError(f"Invalid theme '{theme}'. Valid themes: {sorted(_VALID_THEMES)}")
+        )
 
     for field in ("context_warning_yellow", "context_warning_orange", "context_warning_red"):
         val = raw.get(field)
@@ -87,6 +118,13 @@ def validate_config(raw: dict[str, Any]) -> list[ConfigError]:
             errors.append(ConfigError(f"'{field}' must be a number, got {type(val).__name__}"))
         elif val is not None and not (0.0 <= float(val) <= 1.0):
             errors.append(ConfigError(f"'{field}' must be between 0.0 and 1.0, got {val}"))
+
+    for name, allowed in _ENUM_FIELDS.items():
+        val = raw.get(name)
+        if val is not None and val not in allowed:
+            errors.append(
+                ConfigError(f"Invalid '{name}' value '{val}'. Allowed: {sorted(allowed)}")
+            )
 
     return errors
 
@@ -116,10 +154,13 @@ class ConfigManager:
 
         local_servers = raw.get("local_servers", {})
         plugin_settings = raw.get("plugin_settings", {})
+        notifications = raw.get("notifications", {})
         if not isinstance(local_servers, dict):
             local_servers = {}
         if not isinstance(plugin_settings, dict):
             plugin_settings = {}
+        if not isinstance(notifications, dict):
+            notifications = {}
 
         return AppConfig(
             default_model_alias=raw.get("default_model_alias"),
@@ -132,6 +173,16 @@ class ConfigManager:
             search_provider=str(raw.get("search_provider", "duckduckgo")),
             local_servers=local_servers,
             plugin_settings=plugin_settings,
+            ui_mode=str(raw.get("ui_mode", "simple")),
+            active_rag_index=raw.get("active_rag_index"),
+            embedding_backend=str(raw.get("embedding_backend", "local")),
+            browse_autonomy=str(raw.get("browse_autonomy", "ask")),
+            browse_mode=str(raw.get("browse_mode", "http")),
+            exec_mode=str(raw.get("exec_mode", "ask")),
+            voice_model=str(raw.get("voice_model", "base")),
+            voice_language=raw.get("voice_language"),
+            mouse_enabled=bool(raw.get("mouse_enabled", True)),
+            notifications=notifications,
         )
 
     def save(self, config: AppConfig) -> None:
@@ -144,6 +195,13 @@ class ConfigManager:
             "context_warning_red": config.context_warning_red,
             "session_autosave": config.session_autosave,
             "search_provider": config.search_provider,
+            "ui_mode": config.ui_mode,
+            "embedding_backend": config.embedding_backend,
+            "browse_autonomy": config.browse_autonomy,
+            "browse_mode": config.browse_mode,
+            "exec_mode": config.exec_mode,
+            "voice_model": config.voice_model,
+            "mouse_enabled": config.mouse_enabled,
         }
         if config.default_model_alias:
             data["default_model_alias"] = config.default_model_alias
@@ -151,5 +209,11 @@ class ConfigManager:
             data["local_servers"] = config.local_servers
         if config.plugin_settings:
             data["plugin_settings"] = config.plugin_settings
+        if config.active_rag_index:
+            data["active_rag_index"] = config.active_rag_index
+        if config.voice_language:
+            data["voice_language"] = config.voice_language
+        # Always persist notifications dict — empty dict means "all defaults"
+        data["notifications"] = dict(config.notifications)
 
         self.paths.config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=True))

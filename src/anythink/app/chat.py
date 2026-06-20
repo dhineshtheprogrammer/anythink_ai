@@ -9,11 +9,18 @@ from rich.text import Text
 
 from anythink import __version__
 from anythink.app.context import AppContext
+from anythink.bookmarks.models import Bookmark
+from anythink.branch.models import BranchInfo
 from anythink.commands.registry import CommandRegistry
 from anythink.config.models import ModelAlias
 from anythink.exceptions import AnythinkError, SearchError
 from anythink.files.reader import FileAttachment, ImageAttachment, TextAttachment
-from anythink.providers.base import BaseProvider, ChatMessage, ContentPart, ImagePart, TextPart, TokenUsage
+from anythink.providers.base import (
+    BaseProvider,
+    ChatMessage,
+    ContentPart,
+    TextPart,
+)
 from anythink.search.base import SearchResult
 from anythink.session.models import Session
 from anythink.ui.banner import print_banner
@@ -35,6 +42,23 @@ class ChatState:
     session_name: str = ""
     pending_attachments: list[FileAttachment] = field(default_factory=list)
     search_enabled: bool = False
+    bookmarks: list[Bookmark] = field(default_factory=list)
+
+    # ── Phase 3: conversation branching ───────────────────────────────────
+    active_branch: str = "main"
+    # Branch name → message list (shares reference with `history` for "main")
+    branches: dict[str, list[ChatMessage]] = field(default_factory=dict)
+    # Branch name → bookmark list (shares reference with `bookmarks` for active)
+    branch_bookmarks: dict[str, list[Bookmark]] = field(default_factory=dict)
+    # Branch name → turn count in parent at divergence
+    branch_diverges: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        """Bootstrap the ``main`` branch so it shares the history list."""
+        if "main" not in self.branches:
+            self.branches["main"] = self.history
+            self.branch_bookmarks["main"] = self.bookmarks
+            self.branch_diverges["main"] = 0
 
 
 def _trim_history(history: list[ChatMessage], context_window: int) -> list[ChatMessage]:
@@ -68,6 +92,29 @@ def _format_search_results(results: list[SearchResult], query: str) -> str:
         if r.snippet:
             lines.append(f"   {r.snippet}")
     return "\n".join(lines)
+
+
+def _build_session(state: ChatState) -> Session:
+    """Serialise a ``ChatState`` (including all branches) to a ``Session``."""
+    branches: dict[str, BranchInfo] = {}
+    for name, msgs in state.branches.items():
+        if name == "main":
+            continue  # main branch is stored in Session.messages
+        branches[name] = BranchInfo(
+            name=name,
+            diverge_turn=state.branch_diverges.get(name, 0),
+            messages=list(msgs),
+            bookmarks=list(state.branch_bookmarks.get(name, [])),
+        )
+    return Session(
+        id=state.session_id,
+        provider=state.provider.name,
+        model_id=state.model_id,
+        messages=list(state.branches.get("main", state.history)),
+        name=state.session_name,
+        bookmarks=list(state.branch_bookmarks.get("main", state.bookmarks)),
+        branches=branches,
+    )
 
 
 class ChatApp:
@@ -186,19 +233,16 @@ class ChatApp:
 
         # Autosave when configured and conversation is non-empty
         if ctx.config.session_autosave and state.history:
-            session = Session(
-                id=state.session_id,
-                provider=state.provider.name,
-                model_id=state.model_id,
-                messages=list(state.history),
-                name=state.session_name,
-            )
-            ctx.session_manager.save(session)
+            chat_session = _build_session(state)
+            ctx.session_manager.save(chat_session)
 
         return 0
 
     def _resolve_state(self) -> ChatState | None:
-        """Resolve the active provider+model from config. Returns None and prints an error on failure."""
+        """Resolve the active provider+model from config.
+
+        Returns None and prints an error on failure.
+        """
         ctx = self.ctx
 
         alias_name = ctx.config.default_model_alias
@@ -215,7 +259,8 @@ class ChatApp:
         if alias is None:
             ctx.console.print(
                 Text(
-                    f"Model alias '{alias_name}' not found. Run `anythink model list` to see available aliases.",
+                    f"Model alias '{alias_name}' not found. "
+                    "Run `anythink model list` to see available aliases.",
                     style=ctx.theme.error,
                 )
             )
@@ -241,7 +286,8 @@ class ChatApp:
         if api_key is None and provider.requires_api_key:
             ctx.console.print(
                 Text(
-                    f"No API key for '{alias.provider}'. Run `anythink keys add {alias.provider}` to add one.",
+                    f"No API key for '{alias.provider}'. "
+                    f"Run `anythink keys add {alias.provider}` to add one.",
                     style=ctx.theme.error,
                 )
             )

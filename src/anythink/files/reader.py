@@ -8,16 +8,49 @@ from pathlib import Path
 from anythink.exceptions import FileError
 from anythink.providers.base import ImagePart
 
-SUPPORTED_TEXT_EXTENSIONS: frozenset[str] = frozenset({
-    ".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".go", ".rs",
-    ".cpp", ".c", ".h", ".cs", ".rb", ".php", ".swift", ".kt",
-    ".json", ".yaml", ".yml", ".csv", ".xml", ".toml", ".env",
-    ".ini", ".cfg", ".md", ".txt", ".rst", ".log",
-})
+SUPPORTED_TEXT_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".py",
+        ".js",
+        ".ts",
+        ".jsx",
+        ".tsx",
+        ".java",
+        ".go",
+        ".rs",
+        ".cpp",
+        ".c",
+        ".h",
+        ".cs",
+        ".rb",
+        ".php",
+        ".swift",
+        ".kt",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".csv",
+        ".xml",
+        ".toml",
+        ".env",
+        ".ini",
+        ".cfg",
+        ".md",
+        ".txt",
+        ".rst",
+        ".log",
+    }
+)
 
-SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset({
-    ".png", ".jpg", ".jpeg", ".webp", ".gif",
-})
+SUPPORTED_IMAGE_EXTENSIONS: frozenset[str] = frozenset(
+    {
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".gif",
+    }
+)
 
 _MIME_TYPES: dict[str, str] = {
     ".png": "image/png",
@@ -27,7 +60,7 @@ _MIME_TYPES: dict[str, str] = {
     ".gif": "image/gif",
 }
 
-MAX_TEXT_BYTES: int = 1 * 1024 * 1024    # 1 MB
+MAX_TEXT_BYTES: int = 1 * 1024 * 1024  # 1 MB
 MAX_IMAGE_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
 
@@ -96,7 +129,10 @@ def read_text_file(path: str | Path) -> TextAttachment:
             )
         raise FileError(
             f"Unsupported text extension '{suffix}'",
-            user_message=f"Unsupported file type '{suffix}' for /file. Supported: {', '.join(sorted(SUPPORTED_TEXT_EXTENSIONS))}.",
+            user_message=(
+                f"Unsupported file type '{suffix}' for /file. "
+                f"Supported: {', '.join(sorted(SUPPORTED_TEXT_EXTENSIONS))}."
+            ),
         )
 
     return _read_text(resolved)
@@ -133,11 +169,13 @@ def _read_text(resolved: Path) -> TextAttachment:
         )
     try:
         content = resolved.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
+    except UnicodeDecodeError as e:
         raise FileError(
             f"File '{resolved.name}' is not valid UTF-8 text",
-            user_message=f"File '{resolved.name}' appears to be a binary file and cannot be read as text.",
-        )
+            user_message=(
+                f"File '{resolved.name}' appears to be a binary file " "and cannot be read as text."
+            ),
+        ) from e
     return TextAttachment(path=resolved, filename=resolved.name, content=content, size_bytes=size)
 
 

@@ -22,6 +22,7 @@ class DuckDuckGoSearch(BaseSearchBackend):
     def is_available(self) -> bool:
         try:
             import duckduckgo_search  # noqa: F401
+
             return True
         except ImportError:
             return False

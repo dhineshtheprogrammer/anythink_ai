@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
-from anythink.exceptions import AuthenticationError, ModelNotFoundError, ProviderError, ProviderUnavailableError, RateLimitError
-from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TextPart, TokenUsage
+from anythink.exceptions import (
+    AuthenticationError,
+    ModelNotFoundError,
+    ProviderError,
+    ProviderUnavailableError,
+    RateLimitError,
+)
+from anythink.providers.base import (
+    BaseProvider,
+    ChatMessage,
+    ModelInfo,
+    StreamChunk,
+    TokenUsage,
+)
 
 if TYPE_CHECKING:
     import groq as groq_sdk
@@ -27,21 +40,23 @@ class GroqProvider(BaseProvider):
     name = "groq"
     display_name = "Groq"
 
-    def _client(self) -> "groq_sdk.AsyncGroq":
+    def _client(self) -> groq_sdk.AsyncGroq:
         try:
             import groq
-        except ImportError:
+        except ImportError as e:
             raise ProviderUnavailableError(
                 "groq SDK not installed",
                 provider=self.name,
                 user_message="Install with: pip install anythink[groq]",
-            )
+            ) from e
         return groq.AsyncGroq(api_key=self._api_key)
 
-    def _build_messages(self, messages: list[ChatMessage]) -> list[dict]:
-        result = []
+    def _build_messages(self, messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
         for msg in messages:
-            content = self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content
+            content = (
+                self._content_to_text(msg.content) if isinstance(msg.content, list) else msg.content
+            )
             result.append({"role": msg.role, "content": content})
         return result
 
@@ -54,7 +69,7 @@ class GroqProvider(BaseProvider):
         temperature: float = 0.7,
     ) -> AsyncIterator[StreamChunk]:
         client = self._client()
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(messages),
             "temperature": temperature,
@@ -65,6 +80,7 @@ class GroqProvider(BaseProvider):
 
         try:
             import groq
+
             stream = await client.chat.completions.create(**kwargs)
             async for chunk in stream:
                 choice = chunk.choices[0] if chunk.choices else None
@@ -91,7 +107,22 @@ class GroqProvider(BaseProvider):
                 raise ProviderError(
                     str(e),
                     provider=self.name,
-                    user_message="Message history is too large for this model. Use /clear to reset the conversation.",
+                    user_message=(
+                        "Message history is too large for this model. "
+                        "Use /clear to reset the conversation."
+                    ),
+                ) from e
+            raise ProviderUnavailableError(str(e), provider=self.name) from e
+        except groq.APIError as e:
+            msg = str(e).lower()
+            if "too large" in msg or "413" in msg or "request entity" in msg:
+                raise ProviderError(
+                    str(e),
+                    provider=self.name,
+                    user_message=(
+                        "Message history is too large for this model. "
+                        "Use /clear to reset the conversation."
+                    ),
                 ) from e
             raise ProviderUnavailableError(str(e), provider=self.name) from e
         except (groq.APIConnectionError, httpx.ConnectError) as e:
@@ -100,7 +131,6 @@ class GroqProvider(BaseProvider):
     async def list_models(self) -> list[ModelInfo]:
         try:
             client = self._client()
-            import groq
             response = await client.models.list()
             return [
                 ModelInfo(

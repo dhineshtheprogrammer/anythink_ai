@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Annotated
 
 import typer
-from typing_extensions import Annotated
 
 from anythink import __version__
-from anythink.app.chat import ChatApp
 from anythink.app.context import AppContext
 from anythink.config.manager import ConfigManager
+from anythink.ui.textual.app import AnythinkApp
 
 app = typer.Typer(
     name="anythink",
@@ -39,7 +39,21 @@ def main(
     ctx: typer.Context,
     version: Annotated[
         bool,
-        typer.Option("--version", "-V", callback=_version_callback, is_eager=True, help="Show version and exit."),
+        typer.Option(
+            "--version",
+            "-V",
+            callback=_version_callback,
+            is_eager=True,
+            help="Show version and exit.",
+        ),
+    ] = False,
+    dashboard: Annotated[
+        bool,
+        typer.Option(
+            "--dashboard",
+            "-D",
+            help="Launch directly in 4-panel Dashboard mode.",
+        ),
     ] = False,
 ) -> None:
     """Start an interactive chat session."""
@@ -52,8 +66,9 @@ def main(
         raise typer.Exit(1)
 
     app_ctx = AppContext.create(paths=config_manager.paths)
-    exit_code = asyncio.run(ChatApp(app_ctx).run())
-    raise typer.Exit(exit_code)
+    anythink_app = AnythinkApp(app_ctx, dashboard=dashboard)
+    anythink_app.run()
+    raise typer.Exit(anythink_app.return_code or 0)
 
 
 @app.command("setup")
@@ -63,6 +78,7 @@ def setup_wizard() -> None:
 
 
 # ── keys sub-commands ──────────────────────────────────────────────────────────
+
 
 @keys_app.command("list")
 def keys_list() -> None:
@@ -80,7 +96,9 @@ def keys_list() -> None:
 
 
 @keys_app.command("add")
-def keys_add(provider: str = typer.Argument(..., help="Provider name (e.g. groq, openai).")) -> None:
+def keys_add(
+    provider: str = typer.Argument(..., help="Provider name (e.g. groq, openai).")
+) -> None:
     """Add an API key for a provider."""
     from anythink.exceptions import KeychainError
     from anythink.keys.manager import KeyManager
@@ -95,7 +113,7 @@ def keys_add(provider: str = typer.Argument(..., help="Provider name (e.g. groq,
         typer.echo(f"API key for '{provider}' saved successfully.")
     except KeychainError as exc:
         typer.echo(f"Error: {exc.user_message}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @keys_app.command("show")
@@ -109,7 +127,7 @@ def keys_show(provider: str = typer.Argument(..., help="Provider name.")) -> Non
         key = km.get_key(provider)
     except KeychainError as exc:
         typer.echo(f"Error: {exc.user_message}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
     if key is None:
         typer.echo(f"No API key found for '{provider}'.")
         raise typer.Exit(1)
@@ -125,7 +143,9 @@ def keys_update(provider: str = typer.Argument(..., help="Provider name.")) -> N
 
     km = KeyManager(paths=ConfigManager().paths)
     if not km.has_key(provider):
-        typer.echo(f"No existing key for '{provider}'. Use `anythink keys add {provider}` to add one.")
+        typer.echo(
+            f"No existing key for '{provider}'. Use `anythink keys add {provider}` to add one."
+        )
         raise typer.Exit(1)
     api_key: str = typer.prompt(f"Enter new API key for '{provider}'", hide_input=True)
     if not api_key.strip():
@@ -136,7 +156,7 @@ def keys_update(provider: str = typer.Argument(..., help="Provider name.")) -> N
         typer.echo(f"API key for '{provider}' updated successfully.")
     except KeychainError as exc:
         typer.echo(f"Error: {exc.user_message}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @keys_app.command("delete")
@@ -157,7 +177,7 @@ def keys_delete(
         typer.echo(f"API key for '{provider}' deleted.")
     except KeychainError as exc:
         typer.echo(f"Error: {exc.user_message}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 @keys_app.command("test")
@@ -178,7 +198,7 @@ def keys_test(provider: str = typer.Argument(..., help="Provider name.")) -> Non
         prov = pr.instantiate(provider, api_key=api_key)
     except AnythinkError as exc:
         typer.echo(f"Error: {exc.user_message}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     typer.echo(f"Testing connection to '{provider}'...")
     ok: bool = asyncio.run(prov.test_connection())
@@ -190,6 +210,7 @@ def keys_test(provider: str = typer.Argument(..., help="Provider name.")) -> Non
 
 
 # ── model sub-commands ─────────────────────────────────────────────────────────
+
 
 @model_app.command("list")
 def model_list() -> None:
@@ -206,7 +227,9 @@ def model_list() -> None:
     typer.echo("  " + "-" * (len(header) - 2))
     for a in aliases:
         vision = "yes" if a.supports_vision else "no"
-        typer.echo(f"  {a.alias:<20} {a.provider:<14} {a.model_id:<30} {a.context_window:>10,}  {vision}")
+        typer.echo(
+            f"  {a.alias:<20} {a.provider:<14} {a.model_id:<30} {a.context_window:>10,}  {vision}"
+        )
 
 
 @model_app.command("add")
@@ -218,7 +241,10 @@ def model_add() -> None:
 
     alias: str = typer.prompt("Alias name (your personal name for this model)")
     if registry.exists(alias):
-        typer.echo(f"Alias '{alias}' already exists. Remove it first with: anythink model remove {alias}", err=True)
+        typer.echo(
+            f"Alias '{alias}' already exists. Remove it first with: anythink model remove {alias}",
+            err=True,
+        )
         raise typer.Exit(1)
 
     provider: str = typer.prompt("Provider (groq, openai, anthropic, gemini, ollama, ...)")
@@ -228,17 +254,19 @@ def model_add() -> None:
         context_window = int(context_raw)
     except ValueError:
         typer.echo("Error: context window must be an integer.", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
     supports_vision: bool = typer.confirm("Does this model support image input?", default=False)
 
-    registry.add(ModelAlias(
-        alias=alias,
-        provider=provider,
-        model_id=model_id,
-        context_window=context_window,
-        supports_vision=supports_vision,
-    ))
+    registry.add(
+        ModelAlias(
+            alias=alias,
+            provider=provider,
+            model_id=model_id,
+            context_window=context_window,
+            supports_vision=supports_vision,
+        )
+    )
     typer.echo(f"Model alias '{alias}' added successfully.")
 
 
@@ -265,10 +293,11 @@ def model_remove(
         typer.echo(f"Model alias '{alias}' removed.")
     except ConfigError as exc:
         typer.echo(f"Error: {exc.user_message}", err=True)
-        raise typer.Exit(1)
+        raise typer.Exit(1) from None
 
 
 # ── plugins sub-commands ──────────────────────────────────────────────────────
+
 
 @plugins_app.command("list")
 def plugins_list() -> None:
@@ -305,7 +334,9 @@ def plugins_info(package: str = typer.Argument(..., help="Plugin package name.")
 
 
 @plugins_app.command("install")
-def plugins_install(package: str = typer.Argument(..., help="PyPI package name to install.")) -> None:
+def plugins_install(
+    package: str = typer.Argument(..., help="PyPI package name to install.")
+) -> None:
     """Install a plugin package from PyPI."""
     from anythink.plugins.manager import PluginManager
 
@@ -320,7 +351,9 @@ def plugins_install(package: str = typer.Argument(..., help="PyPI package name t
 
 
 @plugins_app.command("remove")
-def plugins_remove(package: str = typer.Argument(..., help="Plugin package name to remove.")) -> None:
+def plugins_remove(
+    package: str = typer.Argument(..., help="Plugin package name to remove.")
+) -> None:
     """Remove an installed plugin package."""
     from anythink.plugins.manager import PluginManager
 

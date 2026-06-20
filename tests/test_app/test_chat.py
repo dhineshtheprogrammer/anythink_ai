@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from io import StringIO
-from typing import Any, AsyncIterator
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -13,9 +14,9 @@ from anythink.app.context import AppContext
 from anythink.commands.handlers import register_commands
 from anythink.commands.registry import CommandRegistry
 from anythink.config.manager import Paths
-from anythink.config.models import ModelAlias, ModelRegistry
+from anythink.config.models import ModelAlias
 from anythink.exceptions import ProviderUnavailableError
-from anythink.providers.base import ChatMessage, StreamChunk, TokenUsage
+from anythink.providers.base import StreamChunk, TokenUsage
 
 
 @pytest.fixture()
@@ -71,6 +72,7 @@ def _make_state(
 
 # ── _resolve_state ────────────────────────────────────────────────────────────
 
+
 class TestResolveState:
     def test_no_default_alias_returns_none(self, ctx: AppContext) -> None:
         # config.default_model_alias is None by default
@@ -85,6 +87,7 @@ class TestResolveState:
 
     def test_unknown_alias_returns_none(self, ctx: AppContext) -> None:
         from dataclasses import replace
+
         ctx.config = replace(ctx.config, default_model_alias="no-such-alias")
         chat = ChatApp(ctx)
         assert chat._resolve_state() is None
@@ -100,11 +103,14 @@ class TestResolveState:
         )
         ctx.model_registry.add(alias)
         from dataclasses import replace
+
         ctx.config = replace(ctx.config, default_model_alias="mymodel")
 
         mock_provider = _make_mock_provider(requires_api_key=False)
-        with patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider), \
-                patch.object(ctx.key_manager, "get_key", return_value=None):
+        with (
+            patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
             state = ChatApp(ctx)._resolve_state()
 
         assert state is not None
@@ -122,18 +128,19 @@ class TestResolveState:
         )
         ctx.model_registry.add(alias)
         from dataclasses import replace
+
         ctx.config = replace(ctx.config, default_model_alias="mygroq")
 
         mock_provider = _make_mock_provider(requires_api_key=True)
-        with patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider), \
-                patch.object(ctx.key_manager, "get_key", return_value=None):
+        with (
+            patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
             state = ChatApp(ctx)._resolve_state()
 
         assert state is None
 
-    def test_provider_load_failure_returns_none(
-        self, ctx: AppContext, xdg_dirs: Paths
-    ) -> None:
+    def test_provider_load_failure_returns_none(self, ctx: AppContext, xdg_dirs: Paths) -> None:
         alias = ModelAlias(
             alias="myalias",
             provider="bad-provider",
@@ -142,13 +149,17 @@ class TestResolveState:
         )
         ctx.model_registry.add(alias)
         from dataclasses import replace
+
         ctx.config = replace(ctx.config, default_model_alias="myalias")
 
-        with patch.object(
-            ctx.provider_registry,
-            "instantiate",
-            side_effect=ProviderUnavailableError("SDK missing", provider="bad-provider"),
-        ), patch.object(ctx.key_manager, "get_key", return_value=None):
+        with (
+            patch.object(
+                ctx.provider_registry,
+                "instantiate",
+                side_effect=ProviderUnavailableError("SDK missing", provider="bad-provider"),
+            ),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
             state = ChatApp(ctx)._resolve_state()
 
         assert state is None
@@ -156,11 +167,14 @@ class TestResolveState:
 
 # ── run() ─────────────────────────────────────────────────────────────────────
 
+
 class TestChatAppRun:
     async def test_run_exits_on_eof(self, ctx: AppContext) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])),
+        ):
             code = await ChatApp(ctx).run()
         assert code == 0
 
@@ -171,30 +185,44 @@ class TestChatAppRun:
 
     async def test_run_exit_command_exits(self, ctx: AppContext) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/exit"])),
+        ):
             code = await ChatApp(ctx).run()
         assert code == 0
 
     async def test_run_quit_command_exits(self, ctx: AppContext) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/quit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/quit"])),
+        ):
             code = await ChatApp(ctx).run()
         assert code == 0
 
     async def test_run_empty_input_skips(self, ctx: AppContext) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["", "  ", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["", "  ", "/exit"]),
+            ),
+        ):
             code = await ChatApp(ctx).run()
         assert code == 0
         assert state.history == []  # empty inputs never added
 
     async def test_run_sends_message_to_provider(self, ctx: AppContext) -> None:
         state = _make_state(text="World")
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hello", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["Hello", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx).run()
         assert len(state.history) == 2
         assert state.history[0].content == "Hello"
@@ -203,8 +231,12 @@ class TestChatAppRun:
     async def test_run_updates_token_count(self, ctx: AppContext) -> None:
         usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
         state = _make_state(usage=usage)
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hi", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session", return_value=MockSession(["Hi", "/exit"])
+            ),
+        ):
             await ChatApp(ctx).run()
         assert state.total_tokens_used == 15
 
@@ -218,8 +250,12 @@ class TestChatAppRun:
         provider.stream_chat = _failing_stream
         state = ChatState(provider=provider, model_id="m", context_window=4096)
 
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hi", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session", return_value=MockSession(["Hi", "/exit"])
+            ),
+        ):
             code = await ChatApp(ctx).run()
 
         assert code == 0
@@ -231,16 +267,20 @@ class TestChatAppRun:
                 raise KeyboardInterrupt
 
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=_InterruptSession()):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=_InterruptSession()),
+        ):
             code = await ChatApp(ctx).run()
         assert code == 0
 
     async def test_run_prints_banner(self, ctx: AppContext) -> None:
         buf = ctx.console._file  # type: ignore[attr-defined]
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])),
+        ):
             await ChatApp(ctx).run()
         output = buf.getvalue()  # type: ignore[attr-defined]
         assert "anythink" in output.lower() or "think" in output.lower()
@@ -250,8 +290,13 @@ class TestChatAppRun:
     ) -> None:
         state = _make_state()
         # /help is a non-exit command; the loop should continue and then /exit breaks it
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/help", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["/help", "/exit"]),
+            ),
+        ):
             code = await ChatApp(ctx, command_registry=registry).run()
         assert code == 0
         assert state.history == []  # slash commands never added to history
@@ -260,8 +305,13 @@ class TestChatAppRun:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["/nope", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["/nope", "/exit"]),
+            ),
+        ):
             code = await ChatApp(ctx, command_registry=registry).run()
         assert code == 0
 
@@ -269,8 +319,10 @@ class TestChatAppRun:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["exit"])),
+        ):
             code = await ChatApp(ctx, command_registry=registry).run()
         assert code == 0
         assert state.history == []
@@ -279,8 +331,13 @@ class TestChatAppRun:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         state = _make_state(text="World")
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hello", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["Hello", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
         sessions = ctx.session_manager.list_sessions()
         assert len(sessions) == 1
@@ -290,8 +347,10 @@ class TestChatAppRun:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         state = _make_state()
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch("anythink.app.chat.make_prompt_session", return_value=MockSession([])),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
         assert ctx.session_manager.list_sessions() == []
 
@@ -299,10 +358,16 @@ class TestChatAppRun:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         from dataclasses import replace
+
         ctx.config = replace(ctx.config, session_autosave=False)
         state = _make_state(text="World")
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session", return_value=MockSession(["Hello", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["Hello", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
         assert ctx.session_manager.list_sessions() == []
 
@@ -315,19 +380,26 @@ class TestMultimodalMessages:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         from pathlib import Path
+
         from anythink.files.reader import ImageAttachment
         from anythink.providers.base import ImagePart
 
         state = _make_state(text="response")
         state.pending_attachments = [
             ImageAttachment(
-                path=Path("/fake.png"), filename="fake.png",
-                image_part=ImagePart(b"\x89PNG", "image/png"), size_bytes=4,
+                path=Path("/fake.png"),
+                filename="fake.png",
+                image_part=ImagePart(b"\x89PNG", "image/png"),
+                size_bytes=4,
             )
         ]
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["describe this", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["describe this", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
@@ -338,19 +410,26 @@ class TestMultimodalMessages:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         from pathlib import Path
+
         from anythink.files.reader import TextAttachment
         from anythink.providers.base import TextPart
 
         state = _make_state(text="response")
         state.pending_attachments = [
             TextAttachment(
-                path=Path("/fake.py"), filename="fake.py",
-                content="print('hello')", size_bytes=14,
+                path=Path("/fake.py"),
+                filename="fake.py",
+                content="print('hello')",
+                size_bytes=14,
             )
         ]
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["what does this do?", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["what does this do?", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
@@ -363,18 +442,24 @@ class TestMultimodalMessages:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         from pathlib import Path
+
         from anythink.files.reader import TextAttachment
 
         state = _make_state(text="response")
         state.pending_attachments = [
             TextAttachment(
-                path=Path("/fake.txt"), filename="fake.txt",
-                content="hello", size_bytes=5,
+                path=Path("/fake.txt"),
+                filename="fake.txt",
+                content="hello",
+                size_bytes=5,
             )
         ]
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["hi", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session", return_value=MockSession(["hi", "/exit"])
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         assert state.pending_attachments == []
@@ -383,19 +468,26 @@ class TestMultimodalMessages:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         from pathlib import Path
+
         from anythink.files.reader import TextAttachment
         from anythink.providers.base import TextPart
 
         state = _make_state(text="response")
         state.pending_attachments = [
             TextAttachment(
-                path=Path("/readme.txt"), filename="readme.txt",
-                content="docs here", size_bytes=9,
+                path=Path("/readme.txt"),
+                filename="readme.txt",
+                content="docs here",
+                size_bytes=9,
             )
         ]
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["summarize it", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["summarize it", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
@@ -407,9 +499,13 @@ class TestMultimodalMessages:
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
         state = _make_state(text="response")
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["plain message", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["plain message", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
@@ -474,17 +570,18 @@ class TestSearchIntegration:
         state = _make_state(text="response")
         state.search_enabled = True
 
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["what is python?", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["what is python?", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
         assert isinstance(user_msg.content, list)
-        assert any(
-            isinstance(p, TextPart) and "[Web Search:" in p.text
-            for p in user_msg.content
-        )
+        assert any(isinstance(p, TextPart) and "[Web Search:" in p.text for p in user_msg.content)
 
     async def test_search_enabled_user_text_also_in_message(
         self, ctx: AppContext, registry: CommandRegistry
@@ -498,17 +595,18 @@ class TestSearchIntegration:
         state = _make_state(text="response")
         state.search_enabled = True
 
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["my question", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["my question", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
         assert isinstance(user_msg.content, list)
-        assert any(
-            isinstance(p, TextPart) and "my question" in p.text
-            for p in user_msg.content
-        )
+        assert any(isinstance(p, TextPart) and "my question" in p.text for p in user_msg.content)
 
     async def test_search_disabled_sends_plain_string(
         self, ctx: AppContext, registry: CommandRegistry
@@ -521,9 +619,13 @@ class TestSearchIntegration:
         state = _make_state(text="response")
         state.search_enabled = False  # explicitly off
 
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["plain", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["plain", "/exit"]),
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]
@@ -537,9 +639,12 @@ class TestSearchIntegration:
         state = _make_state(text="response")
         state.search_enabled = True
 
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["hi", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session", return_value=MockSession(["hi", "/exit"])
+            ),
+        ):
             code = await ChatApp(ctx, command_registry=registry).run()
 
         assert code == 0
@@ -556,9 +661,12 @@ class TestSearchIntegration:
         state = _make_state(text="response")
         state.search_enabled = True
 
-        with patch.object(ChatApp, "_resolve_state", return_value=state), \
-                patch("anythink.app.chat.make_prompt_session",
-                      return_value=MockSession(["hi", "/exit"])):
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session", return_value=MockSession(["hi", "/exit"])
+            ),
+        ):
             await ChatApp(ctx, command_registry=registry).run()
 
         user_msg = state.history[0]

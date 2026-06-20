@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from io import StringIO
-from typing import AsyncIterator
-
-import pytest
 
 from anythink.providers.base import StreamChunk, TokenUsage
 from anythink.ui.console import make_console

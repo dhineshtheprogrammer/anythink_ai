@@ -6,7 +6,7 @@ from io import StringIO
 
 from anythink.ui.banner import print_banner
 from anythink.ui.console import make_console
-from anythink.ui.theme import MIDNIGHT, AURORA
+from anythink.ui.theme import AURORA, MIDNIGHT
 
 
 def _captured_banner(version: str, theme=MIDNIGHT) -> str:

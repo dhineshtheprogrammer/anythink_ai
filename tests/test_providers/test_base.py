@@ -108,6 +108,7 @@ class TestMockProvider:
         provider = MockProvider()
         msgs = make_messages("Hi")
         import asyncio
+
         asyncio.run(provider.stream_chat(msgs, "mock-model").__anext__())
         assert len(provider.stream_calls) == 1
 
