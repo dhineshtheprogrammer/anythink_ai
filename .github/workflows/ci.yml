@@ -18,8 +18,8 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install all extras + dev dependencies
-        run: pip install -e ".[all,dev]"
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
 
       - name: Lint (ruff)
         run: ruff check src/
