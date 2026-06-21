@@ -15,8 +15,8 @@ from anythink.exceptions import ConfigError
 
 
 class TestVersion:
-    def test_version_is_2_0_0(self) -> None:
-        assert __version__ == "2.0.0"
+    def test_version_is_3_0_0(self) -> None:
+        assert __version__ == "3.0.0"
 
     def test_version_is_string(self) -> None:
         assert isinstance(__version__, str)

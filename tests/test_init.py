@@ -14,4 +14,4 @@ def test_version_when_package_not_installed() -> None:
 
     with patch("importlib.metadata.version", side_effect=PackageNotFoundError("anythink")):
         importlib.reload(anythink)
-        assert anythink.__version__ == "2.0.0"
+        assert anythink.__version__ == "3.0.0"

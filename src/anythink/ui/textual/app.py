@@ -482,7 +482,7 @@ class AnythinkApp(App[int]):
 
     def action_open_in_editor(self) -> None:
         """Ctrl+O: open the current session file in the system text editor."""
-        import subprocess
+        import subprocess  # nosec B404
         import sys
 
         conv = self.query_one(ConversationView)
