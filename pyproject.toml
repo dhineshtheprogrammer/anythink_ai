@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anythink"
-version = "2.0.0"
-description = "A universal AI terminal workstation: multi-provider LLM chat, RAG, agentic tools, MCP, voice, 4-panel dashboard, and a plugin architecture."
+version = "3.0.0"
+description = "A universal AI terminal workstation: multi-provider LLM chat, RAG, agentic tools, MCP, voice, 4-panel dashboard, spend tracking, batch processing, scheduling, and a plugin architecture."
 readme = "README.md"
 license = { file = "LICENSE" }
 authors = [{ name = "dhineshtheprogrammer", email = "dhineshpro33@gmail.com" }]
