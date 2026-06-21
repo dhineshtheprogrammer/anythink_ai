@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-import pytest
-
 from anythink.notify.backends import NullBackend
 from anythink.notify.notifier import (
     NOTIFICATION_DEFAULTS,

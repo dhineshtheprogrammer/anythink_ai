@@ -17,11 +17,13 @@ from anythink.exceptions import (
 from anythink.providers.base import (
     BaseProvider,
     ChatMessage,
+    GenerationParams,
     ImagePart,
     ModelInfo,
     StreamChunk,
     TextPart,
     TokenUsage,
+    _resolve_params,
 )
 
 if TYPE_CHECKING:
@@ -86,16 +88,24 @@ class OpenAIProvider(BaseProvider):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        params = _resolve_params(gen_params, temperature, max_tokens)
         client = self._client()
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(messages),
-            "temperature": temperature,
+            "temperature": params.temperature,
             "stream": True,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+        if params.max_tokens is not None:
+            kwargs["max_tokens"] = params.max_tokens
+        if params.top_p is not None:
+            kwargs["top_p"] = params.top_p
+        if params.frequency_penalty is not None:
+            kwargs["frequency_penalty"] = params.frequency_penalty
+        if params.presence_penalty is not None:
+            kwargs["presence_penalty"] = params.presence_penalty
 
         try:
             import openai

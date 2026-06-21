@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 
 from anythink.exceptions import ConfigError
+from anythink.providers.base import GenerationParams
 
 
 @dataclass
@@ -22,9 +23,10 @@ class ModelAlias:
     context_window: int
     supports_vision: bool = False
     added_at: datetime = field(default_factory=datetime.utcnow)
+    gen_params: GenerationParams | None = None  # V3: per-alias generation params
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "alias": self.alias,
             "provider": self.provider,
             "model_id": self.model_id,
@@ -32,12 +34,31 @@ class ModelAlias:
             "supports_vision": self.supports_vision,
             "added_at": self.added_at.isoformat(),
         }
+        if self.gen_params is not None:
+            d["gen_params"] = {
+                "temperature": self.gen_params.temperature,
+                "max_tokens": self.gen_params.max_tokens,
+                "top_p": self.gen_params.top_p,
+                "frequency_penalty": self.gen_params.frequency_penalty,
+                "presence_penalty": self.gen_params.presence_penalty,
+            }
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> ModelAlias:
         added_at = (
             datetime.fromisoformat(data["added_at"]) if "added_at" in data else datetime.utcnow()
         )
+        gen_params: GenerationParams | None = None
+        if "gen_params" in data and isinstance(data["gen_params"], dict):
+            gp = data["gen_params"]
+            gen_params = GenerationParams(
+                temperature=float(gp.get("temperature", 0.7)),
+                max_tokens=gp.get("max_tokens"),
+                top_p=gp.get("top_p"),
+                frequency_penalty=gp.get("frequency_penalty"),
+                presence_penalty=gp.get("presence_penalty"),
+            )
         return cls(
             alias=data["alias"],
             provider=data["provider"],
@@ -45,6 +66,7 @@ class ModelAlias:
             context_window=int(data.get("context_window", 4096)),
             supports_vision=bool(data.get("supports_vision", False)),
             added_at=added_at,
+            gen_params=gen_params,
         )
 
 

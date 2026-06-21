@@ -139,6 +139,96 @@ def register_commands(registry: CommandRegistry) -> None:
             "/notify on|off|status  |  /notify type <name> on|off",
         )
     )
+    registry.register(
+        SlashCommand(
+            "settings",
+            "Open the interactive settings menu",
+            _settings_cmd,
+            "/settings",
+        )
+    )
+
+    # ── V3 commands ────────────────────────────────────────────────────────────
+    registry.register(
+        SlashCommand(
+            "params",
+            "View or set generation parameters for the active model alias",
+            _params,
+            "/params  |  /params temperature=0.8 max_tokens=2048 top_p=0.9",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "cost",
+            "Show estimated API spend for the current session or all time",
+            _cost,
+            "/cost  |  /cost today  |  /cost month  |  /cost by-model  |  /cost by-provider",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "template",
+            "Manage prompt templates",
+            _template,
+            "/template list  |  save <name> <body>  |  show <name>  |  delete <name>",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "use",
+            "Instantiate a prompt template and send it as a message",
+            _use,
+            "/use <name>  |  /use <name> key=value ...",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "doctor",
+            "Run diagnostics and check the health of your Anythink installation",
+            _doctor,
+            "/doctor",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "update",
+            "Check for or install Anythink updates",
+            _update,
+            "/update  |  /update check",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "config",
+            "Export or import Anythink configuration as a portable bundle",
+            _config_cmd,
+            "/config export [path]  |  /config import <path>",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "export",
+            "Export the current session to Markdown, JSON, or PDF",
+            _export,
+            "/export [markdown|json|pdf] [path]  |  /export --range 1-10",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "compare",
+            "Compare responses from multiple model aliases side-by-side",
+            _compare,
+            "/compare <alias1> <alias2> [alias3 ...]",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "schedule",
+            "Manage scheduled prompt automation",
+            _schedule,
+            "/schedule list  |  add <name> <cron> <prompt>  |  remove|run|enable|disable <name>",
+        )
+    )
 
 
 async def _help(
@@ -161,9 +251,12 @@ async def _clear(
     state: ChatState,
     registry: CommandRegistry,
 ) -> CommandResult:
-    state.history = [m for m in state.history if m.role == "system"]
-    state.total_tokens_used = 0
-    return CommandResult(message="Conversation cleared.")
+    return CommandResult(
+        action="clear_confirm",
+        message="Clear conversation? This will reset the visible chat to empty.\n"
+        "Your messages are saved and reachable via /history.\n"
+        "[Y] Clear  [N] Cancel",
+    )
 
 
 async def _history(
@@ -1212,4 +1305,597 @@ async def _notify(
     return CommandResult(
         error=True,
         message="Usage: /notify on|off|status  |  /notify type <name> on|off",
+    )
+
+
+async def _settings_cmd(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    return CommandResult(action="open_settings")
+
+
+# ── V3: Per-model generation parameters ───────────────────────────────────────
+
+
+async def _params(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """View or update generation parameters for the active model alias."""
+    from dataclasses import replace as dc_replace
+
+    from anythink.providers.base import GenerationParams
+
+    alias_name = ctx.config.default_model_alias
+    alias = ctx.model_registry.get(alias_name or "") if alias_name else None
+
+    if not alias:
+        return CommandResult(
+            error=True,
+            message="No active model alias. Set one with 'anythink model add'.",
+        )
+
+    if not args.strip():
+        p = alias.gen_params
+        if p is None:
+            return CommandResult(
+                message=f"  {alias.alias}: using provider defaults (no custom params set)"
+            )
+        lines = [f"  Generation params for '{alias.alias}':"]
+        lines.append(f"    temperature      = {p.temperature}")
+        lines.append(f"    max_tokens       = {p.max_tokens}")
+        lines.append(f"    top_p            = {p.top_p}")
+        lines.append(f"    frequency_penalty= {p.frequency_penalty}")
+        lines.append(f"    presence_penalty = {p.presence_penalty}")
+        return CommandResult(message="\n".join(lines))
+
+    if args.strip().lower() == "reset":
+        updated = dc_replace(alias, gen_params=None)
+        ctx.model_registry.add(updated)
+        return CommandResult(message=f"  Params for '{alias.alias}' reset to provider defaults.")
+
+    # Parse key=value pairs
+    current = alias.gen_params or GenerationParams()
+    temp = current.temperature
+    max_tok = current.max_tokens
+    top_p = current.top_p
+    freq_pen = current.frequency_penalty
+    pres_pen = current.presence_penalty
+
+    for token in args.split():
+        if "=" not in token:
+            continue
+        key, _, val_str = token.partition("=")
+        key = key.strip().lower()
+        try:
+            float(val_str)  # validate it's numeric before branching
+            if key == "temperature":
+                temp = float(val_str)
+            elif key == "max_tokens":
+                max_tok = int(float(val_str))
+            elif key == "top_p":
+                top_p = float(val_str)
+            elif key == "frequency_penalty":
+                freq_pen = float(val_str)
+            elif key == "presence_penalty":
+                pres_pen = float(val_str)
+            else:
+                return CommandResult(
+                    error=True,
+                    message=(
+                        f"Unknown param '{key}'. Valid: temperature, max_tokens,"
+                        " top_p, frequency_penalty, presence_penalty"
+                    ),
+                )
+        except ValueError:
+            return CommandResult(error=True, message=f"Invalid value for '{key}': {val_str}")
+
+    new_params = GenerationParams(
+        temperature=temp,
+        max_tokens=max_tok,
+        top_p=top_p,
+        frequency_penalty=freq_pen,
+        presence_penalty=pres_pen,
+    )
+    updated = dc_replace(alias, gen_params=new_params)
+    ctx.model_registry.add(updated)
+    return CommandResult(message=f"  Params updated for '{alias.alias}'.\n  Use /params to review.")
+
+
+# ── V3: Spend tracking ─────────────────────────────────────────────────────────
+
+
+async def _cost(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Show estimated API spend for the session or historical totals."""
+    sub = args.strip().lower()
+
+    tracker = ctx.spend_tracker
+
+    if sub in ("", "session"):
+        total = tracker.session_total(state.session_id)
+        return CommandResult(
+            message=f"  Session spend (estimate): ${total:.4f}\n  (Actual billing may differ.)"
+        )
+
+    if sub == "today":
+        total = tracker.daily_total()
+        return CommandResult(message=f"  Today's spend (estimate): ${total:.4f}")
+
+    if sub == "month":
+        total = tracker.monthly_total()
+        return CommandResult(message=f"  This month's spend (estimate): ${total:.4f}")
+
+    if sub == "by-model":
+        by_model = tracker.by_model()
+        if not by_model:
+            return CommandResult(message="  No spend data recorded yet.")
+        lines = ["  Spend by model (estimate):"]
+        for model_id, amt in sorted(by_model.items(), key=lambda x: -x[1]):
+            lines.append(f"    {model_id:<40} ${amt:.4f}")
+        return CommandResult(message="\n".join(lines))
+
+    if sub == "by-provider":
+        by_prov = tracker.by_provider()
+        if not by_prov:
+            return CommandResult(message="  No spend data recorded yet.")
+        lines = ["  Spend by provider (estimate):"]
+        for prov, amt in sorted(by_prov.items(), key=lambda x: -x[1]):
+            lines.append(f"    {prov:<20} ${amt:.4f}")
+        return CommandResult(message="\n".join(lines))
+
+    return CommandResult(
+        error=True,
+        message="Usage: /cost  |  /cost today  |  /cost month  |  /cost by-model  |  /cost by-provider",  # noqa: E501
+    )
+
+
+# ── V3: Prompt templates ───────────────────────────────────────────────────────
+
+
+async def _template(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Manage saved prompt templates."""
+    from anythink.config.templates import PromptTemplate
+
+    parts = args.strip().split(None, 1)
+    sub = parts[0].lower() if parts else "list"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub == "list":
+        templates = ctx.template_manager.list_all()
+        if not templates:
+            return CommandResult(
+                message="  No templates saved. Use /template save <name> <body> to create one."
+            )
+        lines = ["  Saved templates:"]
+        for t in templates:
+            desc = f" — {t.description}" if t.description else ""
+            vars_str = f" [{', '.join(t.variables())}]" if t.variables() else ""
+            lines.append(f"    {t.name}{vars_str}{desc}")
+        return CommandResult(message="\n".join(lines))
+
+    if sub == "show":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /template show <name>")
+        t_show = ctx.template_manager.get(rest)
+        if t_show is None:
+            return CommandResult(error=True, message=f"  Template '{rest}' not found.")
+        t = t_show
+        lines = [f"  Template: {t.name}"]
+        if t.description:
+            lines.append(f"  Description: {t.description}")
+        if t.variables():
+            lines.append(f"  Variables: {', '.join(t.variables())}")
+        lines.append(f"  Body:\n{t.body}")
+        return CommandResult(message="\n".join(lines))
+
+    if sub == "delete":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /template delete <name>")
+        try:
+            ctx.template_manager.remove(rest)
+        except Exception as e:
+            return CommandResult(error=True, message=str(e))
+        return CommandResult(message=f"  Template '{rest}' deleted.")
+
+    if sub == "save":
+        name_and_body = rest.split(None, 1)
+        if len(name_and_body) < 2:
+            return CommandResult(
+                error=True,
+                message="Usage: /template save <name> <body text>",
+            )
+        name = name_and_body[0]
+        body = name_and_body[1]
+        t = PromptTemplate(name=name, body=body)
+        ctx.template_manager.add(t)
+        vars_list = t.variables()
+        vars_info = f" (variables: {', '.join(vars_list)})" if vars_list else ""
+        return CommandResult(message=f"  Template '{name}' saved.{vars_info}")
+
+    return CommandResult(
+        error=True,
+        message="Usage: /template list  |  save <name> <body>  |  show <name>  |  delete <name>",
+    )
+
+
+async def _use(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Instantiate a prompt template and queue it to be sent as a user message."""
+    parts = args.strip().split(None, 1)
+    if not parts or not parts[0]:
+        return CommandResult(error=True, message="Usage: /use <template-name> [key=value ...]")
+
+    name = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
+
+    tmpl = ctx.template_manager.get(name)
+    if tmpl is None:
+        return CommandResult(
+            error=True, message=f"  Template '{name}' not found. Use /template list."
+        )
+
+    # Parse key=value pairs
+    variables: dict[str, str] = {}
+    for token in rest.split():
+        if "=" in token:
+            k, _, v = token.partition("=")
+            variables[k.strip()] = v.strip()
+
+    try:
+        rendered = tmpl.render(variables)
+    except Exception as e:
+        return CommandResult(error=True, message=str(e))
+
+    return CommandResult(
+        action="template_send",
+        extra={"rendered": rendered},
+        message=f"  Using template '{name}'…",
+    )
+
+
+# ── V3: Diagnostics ────────────────────────────────────────────────────────────
+
+
+async def _doctor(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Run a comprehensive health check of the Anythink installation."""
+    from anythink.diagnostics import run_diagnostics
+
+    results = await run_diagnostics(ctx)
+
+    lines = ["  Anythink Diagnostics", "  " + "─" * 50]
+    current_category = ""
+    pass_count = warn_count = fail_count = 0
+
+    for r in results:
+        if r.category != current_category:
+            current_category = r.category
+            lines.append(f"\n  {r.category.title()}")
+
+        icon = {"ok": "✓", "warn": "⚠", "fail": "❌"}.get(r.status, "?")
+        lines.append(f"    {icon} {r.name}: {r.message}")
+        if r.detail:
+            lines.append(f"      → {r.detail}")
+
+        if r.status == "ok":
+            pass_count += 1
+        elif r.status == "warn":
+            warn_count += 1
+        else:
+            fail_count += 1
+
+    lines.append(f"\n  Summary: {pass_count} passed, {warn_count} warnings, {fail_count} failed")
+    return CommandResult(message="\n".join(lines))
+
+
+# ── V3: Self-update ────────────────────────────────────────────────────────────
+
+
+async def _update(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Check for Anythink updates or initiate an upgrade."""
+    from anythink.updater import check_update
+
+    sub = args.strip().lower()
+
+    current, latest = await check_update()
+
+    if sub == "check" or not latest:
+        if latest is None:
+            return CommandResult(message=f"  Current version: {current}  (Could not reach PyPI.)")
+        if latest == current:
+            return CommandResult(message=f"  Anythink is up to date ({current}).")
+        return CommandResult(
+            message=f"  Current: {current}  →  Available: {latest}\n  Run /update to upgrade."
+        )
+
+    # /update (no args) — offer upgrade
+    if latest == current:
+        return CommandResult(message=f"  Anythink is already up to date ({current}).")
+
+    return CommandResult(
+        action="update_confirm",
+        extra={"current": current, "latest": latest},
+        message=(
+            f"  Upgrade available: {current} → {latest}\n" "  Type 'y' to confirm the upgrade."
+        ),
+    )
+
+
+# ── V3: Config backup / restore ────────────────────────────────────────────────
+
+
+async def _config_cmd(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Export or import Anythink configuration as a portable bundle."""
+    from anythink.config.backup import export_config, import_config
+
+    parts = args.strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if sub == "export":
+        if rest:
+            out_path = Path(rest)
+        else:
+            from datetime import datetime as _dt
+
+            stamp = _dt.utcnow().strftime("%Y-%m-%d")
+            out_path = ctx.paths.data_dir / f"anythink-backup-{stamp}.json"
+        try:
+            export_config(ctx, out_path)
+        except Exception as e:
+            return CommandResult(error=True, message=f"  Export failed: {e}")
+        return CommandResult(
+            message=(
+                f"  Config exported to: {out_path}\n"
+                "  Included: theme, models, personas, templates, schedules\n"
+                "  Excluded: API keys (re-enter with 'anythink keys add' on the new machine)"
+            )
+        )
+
+    if sub == "import":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /config import <path>")
+        in_path = Path(rest)
+        if not in_path.exists():
+            return CommandResult(error=True, message=f"  File not found: {rest}")
+        try:
+            import_config(ctx, in_path)
+        except Exception as e:
+            return CommandResult(error=True, message=f"  Import failed: {e}")
+        return CommandResult(
+            message=(
+                "  Config imported successfully.\n"
+                "  Restart Anythink for all changes to take effect."
+            )
+        )
+
+    return CommandResult(
+        error=True,
+        message="Usage: /config export [path]  |  /config import <path>",
+    )
+
+
+# ── V3: Session export ─────────────────────────────────────────────────────────
+
+
+async def _export(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Export the current session to Markdown, JSON, or PDF."""
+    from anythink.app.chat import _build_session
+    from anythink.export.formats import export_json, export_markdown, export_pdf
+
+    tokens = args.strip().split() if args.strip() else []
+    fmt = "markdown"
+    out_path: Path | None = None
+    message_range: tuple[int, int] | None = None
+
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i].lower()
+        if tok in ("markdown", "md"):
+            fmt = "markdown"
+        elif tok == "json":
+            fmt = "json"
+        elif tok == "pdf":
+            fmt = "pdf"
+        elif tok == "--range" and i + 1 < len(tokens):
+            i += 1
+            try:
+                start_s, end_s = tokens[i].split("-")
+                message_range = (int(start_s) - 1, int(end_s))
+            except ValueError:
+                return CommandResult(error=True, message="Usage: --range N-M (e.g. --range 1-10)")
+        elif not tok.startswith("-"):
+            out_path = Path(tok)
+        i += 1
+
+    ext_map = {"markdown": "md", "json": "json", "pdf": "pdf"}
+    if out_path is None:
+        ctx.paths.exports_dir.mkdir(parents=True, exist_ok=True)
+        out_path = ctx.paths.exports_dir / f"{state.session_id}.{ext_map[fmt]}"
+
+    session = _build_session(state)
+    try:
+        if fmt == "markdown":
+            export_markdown(session, out_path, message_range=message_range)
+        elif fmt == "json":
+            export_json(session, out_path, message_range=message_range)
+        else:
+            export_pdf(session, out_path, message_range=message_range)
+    except Exception as e:
+        return CommandResult(error=True, message=f"  Export failed: {e}")
+
+    return CommandResult(message=f"  Exported {fmt} to: {out_path}")
+
+
+# ── V3: Multi-model comparison ─────────────────────────────────────────────────
+
+
+async def _compare(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Set up a multi-model comparison for the next message."""
+    parts = args.strip().split()
+
+    if not parts:
+        return CommandResult(
+            error=True,
+            message="Usage: /compare <alias1> <alias2> [alias3 ...]",
+        )
+
+    # Validate aliases exist
+    missing = [a for a in parts if not ctx.model_registry.exists(a)]
+    if missing:
+        return CommandResult(
+            error=True,
+            message=f"  Unknown alias(es): {', '.join(missing)}. Use 'anythink model list'.",
+        )
+
+    if len(parts) < 2:
+        return CommandResult(
+            error=True,
+            message="  Comparison requires at least 2 model aliases.",
+        )
+
+    return CommandResult(
+        action="compare_request",
+        extra={"aliases": parts},
+        message=(
+            f"  Comparison mode set for: {', '.join(parts)}\n"
+            "  Send your next message to compare."
+        ),
+    )
+
+
+# ── V3: Scheduled prompts ──────────────────────────────────────────────────────
+
+
+async def _schedule(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Manage scheduled prompt automation."""
+    from anythink.schedule.models import ScheduledPrompt
+
+    parts = args.strip().split(None, 3)
+    sub = parts[0].lower() if parts else "list"
+
+    if sub == "list":
+        schedules = ctx.schedule_manager.list_all()
+        if not schedules:
+            return CommandResult(
+                message="  No schedules defined. Use /schedule add <name> <cron> <prompt>."
+            )
+        lines = ["  Scheduled prompts:"]
+        for s in schedules:
+            status = "enabled" if s.enabled else "paused"
+            last = s.last_run.strftime("%Y-%m-%d %H:%M") if s.last_run else "never"
+            lines.append(f"    [{status}] {s.name}  cron={s.cron_expr!r}  last_run={last}")
+        return CommandResult(message="\n".join(lines))
+
+    if sub == "add":
+        # /schedule add <name> <cron> <prompt>
+        if len(parts) < 4:
+            return CommandResult(
+                error=True,
+                message='Usage: /schedule add <name> "<cron>" <prompt text>',
+            )
+        name = parts[1]
+        cron_expr = parts[2]
+        prompt_text = parts[3]
+        s = ScheduledPrompt(name=name, cron_expr=cron_expr, prompt=prompt_text)
+        ctx.schedule_manager.add(s)
+        return CommandResult(message=f"  Schedule '{name}' added (cron: {cron_expr!r}).")
+
+    if sub in ("remove", "delete"):
+        name = parts[1] if len(parts) > 1 else ""
+        if not name:
+            return CommandResult(error=True, message="Usage: /schedule remove <name>")
+        try:
+            ctx.schedule_manager.remove(name)
+        except Exception as e:
+            return CommandResult(error=True, message=str(e))
+        return CommandResult(message=f"  Schedule '{name}' removed.")
+
+    if sub == "enable":
+        name = parts[1] if len(parts) > 1 else ""
+        if not name:
+            return CommandResult(error=True, message="Usage: /schedule enable <name>")
+        try:
+            ctx.schedule_manager.enable(name)
+        except Exception as e:
+            return CommandResult(error=True, message=str(e))
+        return CommandResult(message=f"  Schedule '{name}' enabled.")
+
+    if sub == "disable":
+        name = parts[1] if len(parts) > 1 else ""
+        if not name:
+            return CommandResult(error=True, message="Usage: /schedule disable <name>")
+        try:
+            ctx.schedule_manager.disable(name)
+        except Exception as e:
+            return CommandResult(error=True, message=str(e))
+        return CommandResult(message=f"  Schedule '{name}' disabled.")
+
+    if sub == "run":
+        name = parts[1] if len(parts) > 1 else ""
+        if not name:
+            return CommandResult(error=True, message="Usage: /schedule run <name>")
+        schedule = ctx.schedule_manager.get(name)
+        if schedule is None:
+            return CommandResult(error=True, message=f"  Schedule '{name}' not found.")
+        return CommandResult(
+            action="schedule_run",
+            extra={"schedule_name": name},
+            message=f"  Running schedule '{name}'…",
+        )
+
+    return CommandResult(
+        error=True,
+        message=(
+            "Usage: /schedule list  |  add <name> <cron> <prompt>"
+            "  |  remove|run|enable|disable <name>"
+        ),
     )

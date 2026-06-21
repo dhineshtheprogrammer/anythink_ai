@@ -19,6 +19,7 @@ from anythink.providers.base import (
     BaseProvider,
     ChatMessage,
     ContentPart,
+    GenerationParams,
     TextPart,
 )
 from anythink.search.base import SearchResult
@@ -43,6 +44,9 @@ class ChatState:
     pending_attachments: list[FileAttachment] = field(default_factory=list)
     search_enabled: bool = False
     bookmarks: list[Bookmark] = field(default_factory=list)
+
+    tokens_estimated: bool = False  # True when token count is client-side estimate
+    gen_params: GenerationParams | None = None  # V3: active generation params
 
     # ── Phase 3: conversation branching ───────────────────────────────────
     active_branch: str = "main"
@@ -218,6 +222,7 @@ class ChatApp:
                 chunk_stream = state.provider.stream_chat(
                     messages=_trim_history(state.history, state.context_window),
                     model=state.model_id,
+                    gen_params=state.gen_params,
                 )
                 full_text, usage = await renderer.stream(chunk_stream)
             except AnythinkError as exc:
@@ -228,6 +233,43 @@ class ChatApp:
             state.history.append(ChatMessage(role="assistant", content=full_text))
             if usage:
                 state.total_tokens_used = usage.total_tokens
+                if ctx.config.spend_tracking:
+                    from anythink.spend.pricing import estimate_cost
+
+                    cost = estimate_cost(state.provider.name, state.model_id, usage)
+                    ctx.spend_tracker.record(
+                        session_id=state.session_id,
+                        model_id=state.model_id,
+                        provider=state.provider.name,
+                        usage=usage,
+                        cost_usd=cost,
+                    )
+                    # Soft budget warning
+                    limit = ctx.config.spend_budget_soft_limit
+                    if limit is not None:
+                        period = ctx.config.spend_budget_period
+                        current_spend = (
+                            ctx.spend_tracker.daily_total()
+                            if period == "daily"
+                            else ctx.spend_tracker.monthly_total()
+                        )
+                        ratio = current_spend / limit
+                        if ratio >= 1.0:
+                            ctx.console.print(
+                                Text(
+                                    f"  ⚠ Spend limit reached: "
+                                    f"${current_spend:.4f} / ${limit:.2f} ({period})",
+                                    style=ctx.theme.error,
+                                )
+                            )
+                        elif ratio >= 0.8:
+                            ctx.console.print(
+                                Text(
+                                    f"  ⚠ Approaching spend limit: "
+                                    f"${current_spend:.4f} / ${limit:.2f} ({period})",
+                                    style=ctx.theme.muted,
+                                )
+                            )
 
             ctx.console.print()
 
@@ -298,4 +340,5 @@ class ChatApp:
             model_id=alias.model_id,
             context_window=alias.context_window,
             search_enabled=ctx.config.web_search_enabled,
+            gen_params=alias.gen_params,
         )

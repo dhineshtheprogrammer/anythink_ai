@@ -38,6 +38,21 @@ class ChatMessage:
 
 
 @dataclass
+class GenerationParams:
+    """Tunable generation parameters for an LLM call.
+
+    Providers only forward the fields they support; unsupported fields are
+    silently ignored rather than causing errors.
+    """
+
+    temperature: float = 0.7
+    max_tokens: int | None = None
+    top_p: float | None = None
+    frequency_penalty: float | None = None  # OpenAI/Groq/Mistral only
+    presence_penalty: float | None = None  # OpenAI/Groq only
+
+
+@dataclass
 class TokenUsage:
     """Token consumption for a single response."""
 
@@ -92,12 +107,17 @@ class BaseProvider(ABC):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """Stream chat completion tokens as they arrive.
 
         Implementations are async generators, so the declared return type is
         ``AsyncIterator`` (not a coroutine). Yields StreamChunk objects; the
         final chunk has finish_reason set and may include TokenUsage.
+
+        When ``gen_params`` is provided its fields take precedence over the
+        flat ``temperature`` / ``max_tokens`` kwargs, preserving backward
+        compatibility with existing callers.
         """
         ...  # pragma: no cover
 
@@ -128,3 +148,18 @@ class BaseProvider(ABC):
         if isinstance(content, str):
             return content
         return " ".join(p.text for p in content if isinstance(p, TextPart))
+
+
+def _resolve_params(
+    gen_params: GenerationParams | None,
+    temperature: float,
+    max_tokens: int | None,
+) -> GenerationParams:
+    """Merge the two calling conventions into one GenerationParams object.
+
+    When ``gen_params`` is supplied its fields win; the flat kwargs act as
+    fallbacks so that callers that don't pass ``gen_params`` still work.
+    """
+    if gen_params is not None:
+        return gen_params
+    return GenerationParams(temperature=temperature, max_tokens=max_tokens)

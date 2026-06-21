@@ -9,7 +9,15 @@ from typing import Any
 import httpx
 
 from anythink.exceptions import ModelNotFoundError, ProviderUnavailableError
-from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TokenUsage
+from anythink.providers.base import (
+    BaseProvider,
+    ChatMessage,
+    GenerationParams,
+    ModelInfo,
+    StreamChunk,
+    TokenUsage,
+    _resolve_params,
+)
 
 _DEFAULT_BASE_URL = "http://localhost:11434"
 
@@ -42,15 +50,21 @@ class OllamaProvider(BaseProvider):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        params = _resolve_params(gen_params, temperature, max_tokens)
+        options: dict[str, Any] = {"temperature": params.temperature}
+        if params.max_tokens is not None:
+            options["num_predict"] = params.max_tokens
+        if params.top_p is not None:
+            options["top_p"] = params.top_p
+        # Ollama does not support frequency_penalty or presence_penalty
         payload: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(messages),
             "stream": True,
-            "options": {"temperature": temperature},
+            "options": options,
         }
-        if max_tokens is not None:
-            payload["options"]["num_predict"] = max_tokens
 
         try:
             async with (

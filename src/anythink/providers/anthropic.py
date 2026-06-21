@@ -17,11 +17,13 @@ from anythink.exceptions import (
 from anythink.providers.base import (
     BaseProvider,
     ChatMessage,
+    GenerationParams,
     ImagePart,
     ModelInfo,
     StreamChunk,
     TextPart,
     TokenUsage,
+    _resolve_params,
 )
 
 if TYPE_CHECKING:
@@ -112,15 +114,20 @@ class AnthropicProvider(BaseProvider):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        params = _resolve_params(gen_params, temperature, max_tokens)
         client = self._client()
         api_messages, system = self._build_messages(messages)
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": api_messages,
-            "max_tokens": max_tokens or 4096,
-            "temperature": temperature,
+            "max_tokens": params.max_tokens or 4096,
+            "temperature": params.temperature,
         }
+        if params.top_p is not None:
+            kwargs["top_p"] = params.top_p
+        # Anthropic does not support frequency_penalty or presence_penalty
         if system:
             kwargs["system"] = system
 

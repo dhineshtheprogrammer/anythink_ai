@@ -104,11 +104,11 @@ class TestGeminiProvider:
 
     def test_missing_sdk_configure_raises(self) -> None:
         p = GeminiProvider(api_key="key")
-        with _patch_no_sdk("google.generativeai"):
-            with pytest.raises(
-                ProviderUnavailableError, match="google-generativeai SDK not installed"
-            ):
-                p._configure()
+        with (
+            _patch_no_sdk("google.generativeai"),
+            pytest.raises(ProviderUnavailableError, match="google-generativeai SDK not installed"),
+        ):
+            p._configure()
 
     @pytest.mark.asyncio
     async def test_list_models_falls_back(self) -> None:
@@ -128,12 +128,12 @@ class TestGeminiProvider:
     @pytest.mark.asyncio
     async def test_stream_chat_raises_on_missing_sdk(self) -> None:
         p = GeminiProvider(api_key="key")
-        with _patch_no_sdk("google.generativeai"):
-            with pytest.raises(
-                ProviderUnavailableError, match="google-generativeai SDK not installed"
-            ):
-                async for _ in p.stream_chat(make_messages("Hi"), "gemini-2.0-flash"):
-                    pass
+        with (
+            _patch_no_sdk("google.generativeai"),
+            pytest.raises(ProviderUnavailableError, match="google-generativeai SDK not installed"),
+        ):
+            async for _ in p.stream_chat(make_messages("Hi"), "gemini-2.0-flash"):
+                pass
 
     def test_get_system_instruction(self) -> None:
         from anythink.providers.base import ChatMessage

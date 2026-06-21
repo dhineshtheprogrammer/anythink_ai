@@ -9,7 +9,7 @@ import pytest
 from anythink.app.chat import ChatState, _build_session
 from anythink.branch.manager import BranchManager
 from anythink.branch.models import BranchInfo
-from anythink.providers.base import ChatMessage, StreamChunk
+from anythink.providers.base import ChatMessage
 
 
 def _make_provider() -> object:
@@ -170,6 +170,7 @@ class TestSessionPersistence:
 
     def test_branch_round_trip(self, tmp_path: object) -> None:
         from pathlib import Path
+
         from anythink.session.manager import SessionManager
 
         sm = SessionManager(sessions_dir=Path(str(tmp_path)))
@@ -188,6 +189,7 @@ class TestSessionPersistence:
 
     def test_branch_diverge_turn_round_trips(self, tmp_path: object) -> None:
         from pathlib import Path
+
         from anythink.session.manager import SessionManager
 
         sm = SessionManager(sessions_dir=Path(str(tmp_path)))
@@ -267,8 +269,6 @@ class TestBranchCommand:
         return AppContext.create(paths=xdg_dirs, console_file=StringIO())  # type: ignore[arg-type]
 
     async def test_branch_list_shows_main(self, registry: object, ctx: object) -> None:
-        from anythink.commands.registry import CommandRegistry
-        from anythink.app.context import AppContext
 
         state = _make_state()
         result = await registry.dispatch("/branch list", ctx, state)  # type: ignore[union-attr]

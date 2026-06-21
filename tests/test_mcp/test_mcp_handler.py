@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from io import StringIO
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -151,7 +151,6 @@ class TestMCPConnectCommand:
         self, ctx: AppContext, state: ChatState, registry: CommandRegistry
     ) -> None:
         import sys
-
         from unittest.mock import patch
 
         ctx.mcp_manager = MCPManager()
@@ -197,7 +196,6 @@ class TestMCPServerCommand:
         self, ctx: AppContext, state: ChatState, registry: CommandRegistry
     ) -> None:
         import sys
-
         from unittest.mock import patch
 
         ctx.mcp_manager = MCPManager()

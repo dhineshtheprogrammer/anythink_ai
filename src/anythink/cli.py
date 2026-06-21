@@ -364,3 +364,182 @@ def plugins_remove(
     else:
         typer.echo(f"Removal failed:\n{output[:500]}", err=True)
         raise typer.Exit(1)
+
+
+# ── V3: batch run ─────────────────────────────────────────────────────────────
+
+
+@app.command("run")
+def batch_run(
+    file: Annotated[
+        typer.FileText,
+        typer.Option("--file", "-f", help="Input file with one prompt per line."),
+    ],
+    output: Annotated[
+        str,
+        typer.Option("--output", "-o", help="Output file path."),
+    ],
+    parallel: Annotated[
+        int,
+        typer.Option("--parallel", "-p", help="Number of prompts to run concurrently (max 20)."),
+    ] = 1,
+    alias: Annotated[
+        str | None,
+        typer.Option("--alias", "-a", help="Model alias to use (defaults to configured default)."),
+    ] = None,
+    fmt: Annotated[
+        str,
+        typer.Option("--format", help="Output format: markdown or json."),
+    ] = "markdown",
+) -> None:
+    """Run a batch of prompts from a file and write results to an output file."""
+    from pathlib import Path
+
+    from anythink.batch.runner import run_batch
+    from anythink.batch.writers import write_json, write_markdown
+
+    config_manager = ConfigManager()
+    if not config_manager.is_configured():
+        typer.echo("Anythink is not configured. Run `anythink setup` first.", err=True)
+        raise typer.Exit(1)
+
+    prompts = [line.strip() for line in file if line.strip()]
+    if not prompts:
+        typer.echo("No prompts found in input file.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Running {len(prompts)} prompt(s) with parallel={min(parallel, 20)}…")
+
+    app_ctx = AppContext.create(paths=config_manager.paths)
+    results = asyncio.run(run_batch(app_ctx, prompts, parallel=parallel, alias=alias))
+
+    out_path = Path(output)
+    if fmt.lower() == "json":
+        write_json(results, out_path)
+    else:
+        write_markdown(results, out_path)
+
+    errors = sum(1 for r in results if r.error)
+    typer.echo(f"Done. {len(results) - errors}/{len(results)} succeeded. Written to: {out_path}")
+    if errors:
+        raise typer.Exit(1)
+
+
+# ── V3: diagnostics (CLI shortcut) ────────────────────────────────────────────
+
+
+@app.command("doctor")
+def cli_doctor() -> None:
+    """Run diagnostics on the Anythink installation."""
+    from anythink.diagnostics import run_diagnostics
+
+    config_manager = ConfigManager()
+    if not config_manager.is_configured():
+        typer.echo("Anythink is not configured. Run `anythink setup` first.", err=True)
+        raise typer.Exit(1)
+
+    app_ctx = AppContext.create(paths=config_manager.paths)
+    results = asyncio.run(run_diagnostics(app_ctx))
+
+    current_category = ""
+    pass_count = warn_count = fail_count = 0
+    for r in results:
+        if r.category != current_category:
+            current_category = r.category
+            typer.echo(f"\n{r.category}")
+        icon = {"ok": "✓", "warn": "⚠", "fail": "✗"}.get(r.status, "?")
+        typer.echo(f"  {icon} {r.name}: {r.message}")
+        if r.detail:
+            typer.echo(f"    → {r.detail}")
+        if r.status == "ok":
+            pass_count += 1
+        elif r.status == "warn":
+            warn_count += 1
+        else:
+            fail_count += 1
+
+    typer.echo(f"\nSummary: {pass_count} passed, {warn_count} warnings, {fail_count} failed")
+    if fail_count:
+        raise typer.Exit(1)
+
+
+# ── V3: scheduler sub-commands ────────────────────────────────────────────────
+
+scheduler_app = typer.Typer(name="scheduler", help="Manage and run the Anythink prompt scheduler.")
+app.add_typer(scheduler_app, name="scheduler")
+
+
+@scheduler_app.command("start")
+def scheduler_start(
+    poll: Annotated[
+        int,
+        typer.Option("--poll", "-p", help="Seconds between schedule checks (default 60)."),
+    ] = 60,
+) -> None:
+    """Start the foreground scheduler loop.
+
+    Checks all enabled schedules every POLL seconds and fires any that are due.
+    Run this in a separate terminal or configure it as a system service.
+    """
+    from anythink.schedule.runner import ScheduleRunner
+
+    config_manager = ConfigManager()
+    if not config_manager.is_configured():
+        typer.echo("Anythink is not configured. Run `anythink setup` first.", err=True)
+        raise typer.Exit(1)
+
+    app_ctx = AppContext.create(paths=config_manager.paths)
+    runner = ScheduleRunner(app_ctx)
+    asyncio.run(runner.start(poll_interval=poll))
+
+
+@scheduler_app.command("run")
+def scheduler_run_once(
+    name: str = typer.Argument(..., help="Name of the schedule to run immediately."),
+) -> None:
+    """Run a named schedule right now, outside its normal cron schedule."""
+    from anythink.schedule.runner import ScheduleRunner
+
+    config_manager = ConfigManager()
+    if not config_manager.is_configured():
+        typer.echo("Anythink is not configured. Run `anythink setup` first.", err=True)
+        raise typer.Exit(1)
+
+    app_ctx = AppContext.create(paths=config_manager.paths)
+    schedule = app_ctx.schedule_manager.get(name)
+    if schedule is None:
+        typer.echo(f"Schedule '{name}' not found.", err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Running schedule '{name}'…")
+    runner = ScheduleRunner(app_ctx)
+    try:
+        text = asyncio.run(runner.run_once(schedule))
+        preview = text[:300] + ("…" if len(text) > 300 else "")
+        typer.echo(f"✓ Done.\n{preview}")
+    except Exception as exc:
+        typer.echo(f"✗ Failed: {exc}", err=True)
+        raise typer.Exit(1) from None
+
+
+@scheduler_app.command("list")
+def scheduler_list() -> None:
+    """List all configured schedules and their status."""
+    config_manager = ConfigManager()
+    if not config_manager.is_configured():
+        typer.echo("Anythink is not configured. Run `anythink setup` first.", err=True)
+        raise typer.Exit(1)
+
+    app_ctx = AppContext.create(paths=config_manager.paths)
+    schedules = app_ctx.schedule_manager.list_all()
+    if not schedules:
+        typer.echo("No schedules configured. Use /schedule add inside Anythink.")
+        return
+
+    header = f"  {'Name':<24} {'Status':<10} {'Cron':<16} Last run"
+    typer.echo(header)
+    typer.echo("  " + "─" * (len(header) - 2))
+    for s in schedules:
+        status = "enabled" if s.enabled else "paused"
+        last = s.last_run.strftime("%Y-%m-%d %H:%M") if s.last_run else "never"
+        typer.echo(f"  {s.name:<24} {status:<10} {s.cron_expr:<16} {last}")

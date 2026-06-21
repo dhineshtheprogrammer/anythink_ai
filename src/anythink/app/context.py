@@ -11,6 +11,7 @@ from anythink.config.manager import ConfigManager, Paths, _resolve_paths
 from anythink.config.models import ModelRegistry
 from anythink.config.personas import PersonaManager
 from anythink.config.schema import AppConfig
+from anythink.config.templates import TemplateManager
 from anythink.embeddings.registry import EmbeddingRegistry
 from anythink.keys.manager import KeyManager
 from anythink.mcp.builtin.filesystem import FilesystemServer
@@ -22,8 +23,10 @@ from anythink.notify.notifier import Notifier
 from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
 from anythink.rag.manager import RAGManager
+from anythink.schedule.manager import ScheduleManager
 from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
+from anythink.spend.tracker import SpendTracker
 from anythink.tools.base import ApprovalMode
 from anythink.tools.runner import ToolRunner
 from anythink.ui.console import make_console
@@ -55,6 +58,9 @@ class AppContext:
     tool_runner: ToolRunner
     mcp_manager: MCPManager
     notifier: Notifier
+    spend_tracker: SpendTracker
+    template_manager: TemplateManager
+    schedule_manager: ScheduleManager
 
     @classmethod
     def create(
@@ -96,6 +102,9 @@ class AppContext:
             ]
         )
 
+        spend_tracker = SpendTracker(log_file=resolved.spend_log_file)
+        spend_tracker.prune(keep_days=90)
+
         return cls(
             config=config,
             paths=resolved,
@@ -114,4 +123,7 @@ class AppContext:
             tool_runner=tool_runner,
             mcp_manager=mcp_manager,
             notifier=notifier,
+            spend_tracker=spend_tracker,
+            template_manager=TemplateManager(path=resolved.templates_file),
+            schedule_manager=ScheduleManager(path=resolved.schedules_file),
         )

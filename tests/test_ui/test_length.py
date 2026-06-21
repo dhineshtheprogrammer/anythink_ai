@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from anythink.ui.length import length_indicator
 
 

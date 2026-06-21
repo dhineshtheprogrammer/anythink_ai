@@ -11,7 +11,15 @@ from anythink.exceptions import (
     ProviderUnavailableError,
     RateLimitError,
 )
-from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TokenUsage
+from anythink.providers.base import (
+    BaseProvider,
+    ChatMessage,
+    GenerationParams,
+    ModelInfo,
+    StreamChunk,
+    TokenUsage,
+    _resolve_params,
+)
 
 if TYPE_CHECKING:
     import mistralai
@@ -59,15 +67,20 @@ class MistralProvider(BaseProvider):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        params = _resolve_params(gen_params, temperature, max_tokens)
         client = self._client()
         kwargs: dict[str, Any] = {
             "model": model,
             "messages": self._build_messages(messages),
-            "temperature": temperature,
+            "temperature": params.temperature,
         }
-        if max_tokens is not None:
-            kwargs["max_tokens"] = max_tokens
+        if params.max_tokens is not None:
+            kwargs["max_tokens"] = params.max_tokens
+        if params.top_p is not None:
+            kwargs["top_p"] = params.top_p
+        # Mistral does not support frequency_penalty or presence_penalty
 
         try:
             stream = await client.chat.stream_async(**kwargs)

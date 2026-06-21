@@ -6,6 +6,100 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [3.0.0] — 2026-06-22
+
+Anythink 3.0 expands the workstation from a great chat tool into a dependable, scriptable, self-maintaining AI platform — adding cost awareness, automation, reusability, and operational maturity.
+
+### Added — V3 Features
+
+#### Per-Model Generation Parameters
+- `GenerationParams` dataclass (temperature, max_tokens, top_p, frequency_penalty, presence_penalty) stored per model alias in `models.yaml`
+- `_resolve_params()` helper merges `gen_params` with legacy flat kwargs for full backward compatibility
+- All 8 providers updated to forward the supported subset of params to their SDKs (Anthropic/Gemini silently ignore unsupported fields)
+- `/params [key=value ...]` — view or set params for the active alias; `/params reset` restores provider defaults
+- `ChatState.gen_params` carries the active alias's params through the TUI stream loop
+
+#### Multi-Model Comparison Mode
+- `/compare <alias1> <alias2> [alias3 ...]` — sends the next prompt to multiple models simultaneously
+- `compare/runner.py`: `run_comparison()` fires providers concurrently via `asyncio.gather` with configurable `max_concurrent` and per-model error isolation
+- TUI renders results sequentially with `══ [alias] ══` headers showing elapsed time, token counts, and estimated cost
+- Pick prompt lets the user choose which response to continue the conversation with
+- All comparison results recorded to `SpendTracker`
+
+#### Spend Tracking
+- `spend/tracker.py`: `SpendTracker` + `SpendRecord` — persists per-response cost estimates to `spend.yaml`
+- `spend/pricing.py`: static pricing table for all supported providers; local providers ($0.00); `estimate_cost()` helper
+- `/cost [session|today|month|by-model|by-provider]` — view accumulated spend at any granularity
+- HUD line 2 shows `~$0.0042` in muted style when session spend > 0
+- Optional soft budget limit in config: warning shown at 80% and 100% of the configured period limit
+- Spend recorded automatically in `ChatApp.run()` and `_stream_response()` after every response with `TokenUsage`
+- Settings menu: "Spend tracking" (on/off) and "Spend budget period" (monthly/daily)
+
+#### Prompt Templates & Snippets
+- `config/templates.py`: `PromptTemplate` dataclass with `{{variable}}` placeholder syntax; `TemplateManager` (same YAML pattern as `PersonaManager`)
+- `render()` uses simple string replacement; raises `ConfigError` listing any unresolved placeholders
+- `/template save|list|show|delete` — full CRUD for the template library
+- `/use <name> [key=value ...]` — renders a template with inline args; result injected into input widget via `action="template_send"`
+
+#### Session Export
+- `export/formats.py`: `export_markdown()`, `export_json()`, `export_pdf()` (fpdf2, optional)
+- Full session or turn-range subset; default output path to `~/.local/share/anythink/exports/`
+- `/export [markdown|json|pdf] [path] [--range N-M]`
+- New `pdf` optional extra: `pip install anythink[pdf]`
+
+#### Scheduled & Recurring Prompts
+- `schedule/models.py`: `ScheduledPrompt` dataclass with cron expression, alias, output file, enabled flag, and last_run tracking
+- `schedule/manager.py`: `ScheduleManager` — CRUD + enable/disable/update_last_run
+- `schedule/runner.py`: `ScheduleRunner` — `run_once()` streams response, appends to output file, notifies; `run_all_due()` evaluates cron expressions (via `croniter`) and fires due schedules concurrently; `start()` foreground blocking loop
+- `/schedule list|add|remove|enable|disable|run`
+- CLI: `anythink scheduler start [--poll N]`, `anythink scheduler run <name>`, `anythink scheduler list`
+- New `scheduler` optional extra: `pip install anythink[scheduler]`
+
+#### Batch Processing Mode
+- `batch/runner.py`: `run_batch()` with `asyncio.Semaphore` (max 20 parallel); per-prompt error isolation
+- `batch/writers.py`: `write_markdown()`, `write_json()`
+- CLI: `anythink run --file prompts.txt --output results.md [--parallel N] [--alias A] [--format md|json]`
+- Exits with code 1 if any prompt errors; clean stdout suitable for piping
+
+#### Self-Update Mechanism
+- `updater.py`: `fetch_latest_version()` queries PyPI JSON API; `current_version()` reads `__version__`; `run_upgrade()` runs `pip install --upgrade` in subprocess
+- `/update check` — prints current vs. latest version
+- `/update` — prompts for confirmation; TUI runs upgrade in background thread; requires restart
+
+#### Diagnostics Command
+- `diagnostics.py`: `run_diagnostics()` + per-category check functions
+- Checks: Python version (3.11+ requirement), optional dependency availability, API key configuration, provider connectivity (5s timeout each), config file YAML validity, disk free space
+- `/doctor` — formatted report with ✓/⚠/❌ per check and a summary line
+- CLI: `anythink doctor`
+
+#### Config Backup & Restore
+- `config/backup.py`: `export_config()` bundles config, models, personas, templates, schedules into a single JSON file (keys excluded by default); `import_config()` validates, snapshots current config, then restores
+- `/config export [path]` — creates portable bundle
+- `/config import <path>` — validates and restores; tells user to restart
+
+### Changed
+
+- `BaseProvider.stream_chat()` gains optional `gen_params: GenerationParams | None = None` — fully backward compatible; existing callers unchanged
+- `ModelAlias` gains `gen_params: GenerationParams | None = None` field with backward-compatible YAML roundtrip
+- `AppConfig` gains `spend_tracking`, `spend_budget_soft_limit`, `spend_budget_period` fields (safe defaults preserve V2 behavior)
+- `ChatState` gains `gen_params: GenerationParams | None = None` field
+- `AppContext` gains `spend_tracker`, `template_manager`, `schedule_manager` fields wired in `create()`
+- `Paths` gains `templates_file`, `schedules_file`, `exports_dir`, `spend_log_file` properties; `ensure_dirs()` creates `exports_dir`
+- HUD line 2 shows session cost when > 0; `session_cost` reactive field added
+- Settings menu extended with V3 spend entries
+- `_stream_response()` in TUI now passes `gen_params` to `stream_chat()` and records spend after each response
+- New exception types: `SpendError`, `ExportError`, `ScheduleError`, `BatchError`, `UpdateError`
+- `pyproject.toml`: new `pdf` and `scheduler` optional extras; both included in `all` and `dev`
+
+### Technical
+- 1,157 tests, 86.1% coverage
+- All CI gates clean: ruff, black, mypy-strict, bandit
+- 74 end-to-end tests in `tests/test_e2e/` covering all V3 command handlers, CLI batch/scheduler/doctor, spend integration, gen_params pass-through, and compare runner
+
+[3.0.0]: https://github.com/dhineshtheprogrammer/anythink_ai/releases/tag/v3.0.0
+
+---
+
 ## [2.0.0] — 2026-06-20
 
 Anythink 2.0 transforms the CLI chatbot into a full **AI terminal workstation** with a Textual TUI, RAG, agentic tools, MCP, voice, notifications, and a 4-panel dashboard.

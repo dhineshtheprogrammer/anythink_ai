@@ -12,7 +12,6 @@ from anythink.app.chat import ChatState
 from anythink.config.schema import AppConfig
 from anythink.ui.hud import HUDWidget, _context_bar
 from anythink.ui.textual.app import AnythinkApp
-from anythink.ui.textual.conversation import ConversationView
 from anythink.ui.theme import AURORA, EMBER, MIDNIGHT
 
 # ── _context_bar helper ────────────────────────────────────────────────────────
@@ -105,8 +104,7 @@ def _make_mock_ctx() -> object:
 
 
 def _make_state(model_id: str = "gpt-4o") -> ChatState:
-    from collections.abc import AsyncIterator
-    from anythink.providers.base import BaseProvider, ModelInfo, StreamChunk
+    from anythink.providers.base import BaseProvider, StreamChunk
 
     class _FakeProvider(BaseProvider):
         name = "fake"

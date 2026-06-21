@@ -11,7 +11,15 @@ from anythink.exceptions import (
     ProviderUnavailableError,
     RateLimitError,
 )
-from anythink.providers.base import BaseProvider, ChatMessage, ModelInfo, StreamChunk, TokenUsage
+from anythink.providers.base import (
+    BaseProvider,
+    ChatMessage,
+    GenerationParams,
+    ModelInfo,
+    StreamChunk,
+    TokenUsage,
+    _resolve_params,
+)
 
 if TYPE_CHECKING:
     import cohere
@@ -64,7 +72,9 @@ class CohereProvider(BaseProvider):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        params = _resolve_params(gen_params, temperature, max_tokens)
         client = self._client()
         message, chat_history = self._build_chat_history(messages)
 
@@ -73,8 +83,11 @@ class CohereProvider(BaseProvider):
                 model=model,
                 message=message,
                 chat_history=chat_history,
-                temperature=temperature,
-                **({"max_tokens": max_tokens} if max_tokens else {}),
+                temperature=params.temperature,
+                **({"max_tokens": params.max_tokens} if params.max_tokens else {}),
+                # Cohere uses p for top_p
+                **({"p": params.top_p} if params.top_p is not None else {}),
+                # frequency_penalty and presence_penalty not supported by Cohere
             )
             async for event in stream:
                 if event.event_type == "text-generation":

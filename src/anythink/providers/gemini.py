@@ -14,11 +14,13 @@ from anythink.exceptions import (
 from anythink.providers.base import (
     BaseProvider,
     ChatMessage,
+    GenerationParams,
     ImagePart,
     ModelInfo,
     StreamChunk,
     TextPart,
     TokenUsage,
+    _resolve_params,
 )
 
 if TYPE_CHECKING:
@@ -108,7 +110,9 @@ class GeminiProvider(BaseProvider):
         *,
         max_tokens: int | None = None,
         temperature: float = 0.7,
+        gen_params: GenerationParams | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        params = _resolve_params(gen_params, temperature, max_tokens)
         try:
             import google.generativeai as genai
 
@@ -118,10 +122,13 @@ class GeminiProvider(BaseProvider):
                 system_instruction=system,
             )
             contents = self._build_contents(messages)
-            gen_config = genai.GenerationConfig(
-                temperature=temperature,
-                **({"max_output_tokens": max_tokens} if max_tokens else {}),
-            )
+            gen_config_kwargs: dict[str, Any] = {"temperature": params.temperature}
+            if params.max_tokens is not None:
+                gen_config_kwargs["max_output_tokens"] = params.max_tokens
+            if params.top_p is not None:
+                gen_config_kwargs["top_p"] = params.top_p
+            # Gemini does not support frequency_penalty or presence_penalty
+            gen_config = genai.GenerationConfig(**gen_config_kwargs)
             response = await genai_model.generate_content_async(
                 contents,
                 generation_config=gen_config,

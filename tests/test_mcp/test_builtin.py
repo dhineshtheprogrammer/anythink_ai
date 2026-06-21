@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-from io import StringIO
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from anythink.mcp.builtin.filesystem import FilesystemServer
 from anythink.mcp.builtin.rag import RAGServer

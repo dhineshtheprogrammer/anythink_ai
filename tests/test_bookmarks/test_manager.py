@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from anythink.bookmarks.manager import BookmarkManager
 from anythink.bookmarks.models import Bookmark
 from anythink.providers.base import ChatMessage
@@ -132,7 +130,6 @@ class TestExport:
 
 class TestSearchSessions:
     def test_search_finds_matching_label(self) -> None:
-        from datetime import datetime
         from anythink.session.models import Session
 
         s = Session.new("groq", "llama3", name="research")

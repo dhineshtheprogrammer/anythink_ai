@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from anythink.rag.chunkers import chunk_code, chunk_file, chunk_text
 
 

@@ -25,17 +25,22 @@ from anythink.files.reader import ImageAttachment, TextAttachment
 from anythink.notify.notifier import SLOW_EXEC_S, SLOW_RESPONSE_S
 from anythink.providers.base import ChatMessage, ContentPart, TextPart
 from anythink.session.manager import auto_session_name
-from anythink.ui.bubbles import AIBubble, SystemBubble, UserBubble
+from anythink.ui.banner import _BANNER
+from anythink.ui.bubbles import AIBubble, LogoBubble, SystemBubble, UserBubble
 from anythink.ui.hud import HUDWidget
 from anythink.ui.startup import find_resumable_session, is_returning_user
 from anythink.ui.textual.conversation import ConversationView
+from anythink.ui.textual.hint_bar import HintBar
 from anythink.ui.textual.input_area import InputArea
 from anythink.ui.textual.panels.file_browser import FileBrowserTab
 from anythink.ui.textual.panels.rag_browser import RAGBrowserTab
 from anythink.ui.textual.panels.session_list import SessionListPanel
 from anythink.ui.textual.panels.stats import StatsPanel
 from anythink.ui.textual.panels.tool_output import ToolOutputTab
+from anythink.ui.textual.settings_menu import SettingsMenu
 from anythink.ui.textual.theme_bridge import resolve
+from anythink.ui.textual.thinking_widget import ThinkingWidget
+from anythink.ui.textual.tips_bar import TipsBar
 
 if TYPE_CHECKING:
     from anythink.app.context import AppContext
@@ -65,7 +70,10 @@ class AnythinkApp(App[int]):
         Binding("ctrl+d", "toggle_dashboard", "Toggle Dashboard", show=True, priority=True),
         Binding("ctrl+l", "toggle_left_panel", "Sessions", show=False, priority=True),
         Binding("ctrl+r", "toggle_right_panel", "Stats", show=False, priority=True),
-        Binding("escape", "focus_input", "Focus input", show=False),
+        Binding("escape", "escape_or_stop", "Stop / Focus", show=False, priority=True),
+        Binding("ctrl+y", "copy_response", "Copy response", show=False),
+        Binding("ctrl+k", "copy_last_code", "Copy code", show=False),
+        Binding("ctrl+o", "open_in_editor", "Open in editor", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -132,6 +140,21 @@ class AnythinkApp(App[int]):
         self._pending_voice: bool = False
         self._voice_recorder: Any = None  # VoiceRecorder | None
 
+        # ── V2.1 state ─────────────────────────────────────────────────────
+        self._pending_clear: bool = False
+        self._stop_streaming: bool = False
+        self._active_ai_bubble: AIBubble | None = None
+        self._last_response_text: str = ""
+
+        # ── V3 state ───────────────────────────────────────────────────────
+        # Compare mode: aliases set by /compare; cleared once comparison fires
+        self._pending_compare_aliases: list[str] | None = None
+        # Results from a completed comparison; cleared once user picks
+        self._pending_compare_results: list[Any] | None = None
+        self._pending_compare_pick: bool = False
+        # Update confirm: set by /update when a newer version is available
+        self._pending_update: bool = False
+
     # ── widget tree ────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
@@ -147,13 +170,17 @@ class AnythinkApp(App[int]):
                 yield RAGBrowserTab(self._ctx, id="rag-browser")
             with TabPane("Tools", id="tab-tools"):
                 yield ToolOutputTab(id="tool-output")
+        yield SettingsMenu(self._ctx, self._ctx.theme, id="settings-menu")
+        yield TipsBar(self._ctx.theme, id="tips-bar")
         yield InputArea()
+        yield HintBar(self._ctx.theme, id="hint-bar")
 
     def on_mount(self) -> None:
         """Resolve state, populate HUD, show startup/resume UI, and focus input."""
         t = self._ctx.theme
         ia = self.query_one(InputArea)
         ia.styles.border_top = ("solid", resolve(t.muted))
+        ia.configure(list(self._cmd_registry.all_commands()), t)
         self.query_one(Input).focus()
 
         if self._dashboard_mode:
@@ -166,6 +193,10 @@ class AnythinkApp(App[int]):
 
         conv = self.query_one(ConversationView)
         hud = self.query_one(HUDWidget)
+
+        # Show ASCII logo on every launch
+        tagline = f"Think anything. Ask anything.  •  v{__version__}"
+        conv.add_bubble(LogoBubble(_BANNER, tagline, t))
 
         if self._state is None:
             conv.add_bubble(
@@ -257,6 +288,21 @@ class AnythinkApp(App[int]):
             )
             return
 
+        # ── clear confirmation ─────────────────────────────────────────────
+        if self._pending_clear:
+            await self._handle_clear_confirmation(text)
+            return
+
+        # ── compare pick ───────────────────────────────────────────────────
+        if self._pending_compare_pick:
+            await self._handle_compare_pick(text)
+            return
+
+        # ── update confirm ─────────────────────────────────────────────────
+        if self._pending_update:
+            await self._handle_update_confirmation(text)
+            return
+
         if not text or self._state is None:
             return
 
@@ -273,6 +319,26 @@ class AnythinkApp(App[int]):
             return
 
         state = self._state
+
+        # ── compare mode: intercept next message ───────────────────────────
+        if self._pending_compare_aliases is not None:
+            aliases = self._pending_compare_aliases
+            self._pending_compare_aliases = None
+            conv.add_bubble(UserBubble(text, t))
+            conv.add_bubble(
+                SystemBubble(
+                    f"Comparing {len(aliases)} models for this prompt…",
+                    t,
+                    kind="info",
+                )
+            )
+            self.run_worker(
+                self._run_comparison(state, text, aliases),
+                exclusive=False,
+                exit_on_error=False,
+            )
+            return
+
         extra: list[ContentPart] = []
 
         for att in state.pending_attachments:
@@ -295,12 +361,20 @@ class AnythinkApp(App[int]):
         user_bub = UserBubble(text, t)
         conv.add_bubble(user_bub)
 
+        # ThinkingWidget is a temporary placeholder; _stream_response replaces it
+        thinking = ThinkingWidget(t)
+        conv.add_bubble(thinking)
+
         bubble = AIBubble(t, model_alias=state.model_id, provider=state.provider.display_name)
-        conv.add_bubble(bubble)
         self._bubble_pairs.append((user_bub, bubble))
 
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self.query_one(TipsBar).start()
+
         self.run_worker(
-            self._stream_response(state, bubble, text),
+            self._stream_response(state, bubble, text, thinking=thinking),
             exclusive=False,
             exit_on_error=False,
         )
@@ -346,9 +420,118 @@ class AnythinkApp(App[int]):
         if rp.display:
             self.query_one(StatsPanel).update_stats(self._ctx, self._state)
 
-    def action_focus_input(self) -> None:
-        """Escape: return keyboard focus to the chat input."""
+    def action_escape_or_stop(self) -> None:
+        """Escape: close settings if open; stop streaming if active; else focus input."""
+        import contextlib
+
+        # Settings overlay takes highest priority
+        with contextlib.suppress(Exception):
+            sm = self.query_one(SettingsMenu)
+            if sm.is_open():
+                sm.action_close()
+                return
+
+        # Next: abort an in-progress generation
+        if self._active_ai_bubble is not None and not self._stop_streaming:
+            self._stop_streaming = True
+            return
+
+        # Fallback: restore focus to the chat input
         self.query_one(Input).focus()
+
+    def action_copy_response(self) -> None:
+        """Ctrl+Y: copy the last AI response to the system clipboard."""
+        import contextlib
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+        if not self._last_response_text:
+            conv.add_bubble(SystemBubble("No response to copy yet.", t, kind="info"))
+            return
+        try:
+            import pyperclip
+
+            pyperclip.copy(self._last_response_text)
+            conv.add_bubble(SystemBubble("✓ Response copied to clipboard.", t, kind="success"))
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                conv.add_bubble(SystemBubble(f"Clipboard unavailable: {exc}", t, kind="error"))
+
+    def action_copy_last_code(self) -> None:
+        """Ctrl+K: copy the first code block from the last AI response."""
+        import contextlib
+        import re
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+        if not self._last_response_text:
+            conv.add_bubble(SystemBubble("No response to copy yet.", t, kind="info"))
+            return
+        match = re.search(r"```[^\n]*\n(.*?)```", self._last_response_text, re.DOTALL)
+        if not match:
+            conv.add_bubble(SystemBubble("No code block found in last response.", t, kind="info"))
+            return
+        try:
+            import pyperclip
+
+            pyperclip.copy(match.group(1))
+            conv.add_bubble(SystemBubble("✓ Code copied to clipboard.", t, kind="success"))
+        except Exception as exc:
+            with contextlib.suppress(Exception):
+                conv.add_bubble(SystemBubble(f"Clipboard unavailable: {exc}", t, kind="error"))
+
+    def action_open_in_editor(self) -> None:
+        """Ctrl+O: open the current session file in the system text editor."""
+        import subprocess
+        import sys
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+        if self._state is None:
+            conv.add_bubble(SystemBubble("No active session.", t, kind="info"))
+            return
+        path = self._ctx.paths.sessions_dir / f"{self._state.session_id}.yaml"
+        if not path.exists():
+            conv.add_bubble(
+                SystemBubble(
+                    "Session file not yet saved. Send a message first.",
+                    t,
+                    kind="info",
+                )
+            )
+            return
+        try:
+            if sys.platform == "win32":
+                subprocess.Popen(["notepad.exe", str(path)])  # nosec B603, B607
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])  # nosec B603, B607
+            else:
+                subprocess.Popen(["xdg-open", str(path)])  # nosec B603, B607
+            conv.add_bubble(SystemBubble("Session file opened in editor.", t, kind="success"))
+        except Exception as exc:
+            conv.add_bubble(SystemBubble(f"Could not open editor: {exc}", t, kind="error"))
+
+    def on_settings_menu_changed(self, event: SettingsMenu.Changed) -> None:
+        """Sync runtime state immediately when a config value is saved from settings."""
+        if self._state is None:
+            return
+        if event.field == "web_search_enabled":
+            self._state.search_enabled = self._ctx.config.web_search_enabled
+        if event.field == "active_theme":
+            from anythink.ui.theme import get_theme
+
+            new_theme = get_theme(self._ctx.config.active_theme)
+            self._ctx.theme = new_theme
+            self.query_one(HUDWidget)._theme = new_theme
+        self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+
+    def on_settings_menu_closed(self, event: SettingsMenu.Closed) -> None:
+        """Return focus to the input after the settings overlay is dismissed."""
+        self.query_one(Input).focus()
+        if self._state is not None:
+            # Final sync: ensure runtime state matches whatever was saved
+            self._state.search_enabled = self._ctx.config.web_search_enabled
+            self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
     def on_session_list_panel_session_selected(
         self, event: SessionListPanel.SessionSelected
@@ -566,6 +749,51 @@ class AnythinkApp(App[int]):
             )
         )
 
+    async def _handle_clear_confirmation(self, text: str) -> None:
+        """Hard-reset the visible conversation if the user confirms."""
+        self._pending_clear = False
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+
+        if text.lower() not in ("y", "yes"):
+            conv.add_bubble(SystemBubble("Clear cancelled.", t, kind="info"))
+            return
+
+        if self._state is None:
+            return
+
+        state = self._state
+
+        # Save conversation to disk before wiping visible state
+        if state.history:
+            self._ctx.session_manager.save(_build_session(state))
+
+        # Reset in-memory history to system messages only
+        state.history = [m for m in state.history if m.role == "system"]
+        state.total_tokens_used = 0
+        state.tokens_estimated = False
+
+        # Wipe all bubble widgets from the conversation view
+        for child in list(conv.children):
+            await child.remove()
+
+        # Reset internal tracking
+        self._bubble_pairs.clear()
+        self._undo_checkpoints.clear()
+        self._turn_bubbles.clear()
+
+        # Restore startup logo and show confirmation
+        tagline = f"Think anything. Ask anything.  •  v{__version__}"
+        conv.add_bubble(LogoBubble(_BANNER, tagline, t))
+        conv.add_bubble(
+            SystemBubble(
+                "✓ Conversation cleared. Previous messages saved to session history.",
+                t,
+                kind="success",
+            )
+        )
+        self.query_one(HUDWidget).update_from_state(self._ctx, state)
+
     async def _handle_exec_confirmation(self, text: str) -> None:
         """Execute code if confirmed, or cancel."""
         data = self._pending_exec_data
@@ -756,6 +984,19 @@ class AnythinkApp(App[int]):
         result = await self._cmd_registry.dispatch(text, self._ctx, self._state)
 
         # Handle TUI-layer signals
+        if result.action == "open_settings":
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self.query_one(SettingsMenu).open()
+            return
+
+        if result.action == "clear_confirm":
+            self._pending_clear = True
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="warning"))
+            return
+
         if result.action == "undo_request":
             self._pending_undo = True
             if result.message:
@@ -841,6 +1082,42 @@ class AnythinkApp(App[int]):
                 exit_on_error=False,
             )
 
+        if result.action == "compare_request":
+            aliases = result.extra.get("aliases", [])
+            if aliases:
+                self._pending_compare_aliases = list(aliases)
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "template_send":
+            rendered = result.extra.get("rendered", "")
+            if rendered and self._state is not None:
+                inp = self.query_one(Input)
+                inp.value = rendered
+                inp.focus()
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "update_confirm":
+            self._pending_update = True
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="warning"))
+            return
+
+        if result.action == "schedule_run":
+            schedule_name = result.extra.get("schedule_name", "")
+            if schedule_name:
+                self.run_worker(
+                    self._run_schedule(schedule_name),
+                    exclusive=False,
+                    exit_on_error=False,
+                )
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
         if result.should_exit:
             self.exit(0)
             return
@@ -858,6 +1135,34 @@ class AnythinkApp(App[int]):
         # Update bookmark indicators for any newly bookmarked turns
         self._sync_bookmark_indicators()
 
+    def _error_suggestion(self, exc: AnythinkError) -> str | None:
+        """Map a known exception type to a suggested fix command."""
+        from anythink.exceptions import (
+            AuthenticationError,
+            ModelNotFoundError,
+            ProviderUnavailableError,
+            RAGError,
+            RateLimitError,
+            ToolExecutionError,
+        )
+
+        if isinstance(exc, AuthenticationError):
+            provider = getattr(exc, "provider", "")
+            if provider:
+                return f"Run /keys update {provider} to enter a new key"
+            return "Run /keys update <provider> to enter a new key"
+        if isinstance(exc, RateLimitError):
+            return "Try /model to switch to a different model alias"
+        if isinstance(exc, ProviderUnavailableError):
+            return "Check your connection; retry or run /keys test <provider>"
+        if isinstance(exc, ModelNotFoundError):
+            return "Run /model list to see available aliases"
+        if isinstance(exc, RAGError):
+            return "Run /rag rebuild <name> or /rag info <name>"
+        if isinstance(exc, ToolExecutionError):
+            return "Check the runtime is in PATH, or change via /settings"
+        return None
+
     def _sync_bookmark_indicators(self) -> None:
         """Refresh ✦ in AIBubble titles to match current bookmark state."""
         if self._state is None:
@@ -874,17 +1179,30 @@ class AnythinkApp(App[int]):
         state: ChatState,
         bubble: AIBubble,
         query: str,
+        *,
+        thinking: ThinkingWidget | None = None,
     ) -> None:
         """Stream the AI response token-by-token into *bubble*."""
         import time
 
         buffer = ""
         t0 = time.monotonic()
+        _got_usage = False
+        _was_stopped = False
+
+        self._active_ai_bubble = bubble
+        self._stop_streaming = False
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self.query_one(HintBar).set_streaming(True)
 
         try:
             # ── RAG retrieval ──────────────────────────────────────────────
             rag_mgr = self._ctx.rag_manager
             if rag_mgr.is_active:
+                if thinking is not None:
+                    thinking.set_context("Retrieving context…")
                 emb = self._ctx.embedding_registry.get_available(self._ctx.config.embedding_backend)
                 if emb is not None:
                     try:
@@ -908,6 +1226,8 @@ class AnythinkApp(App[int]):
 
             # ── Web search ─────────────────────────────────────────────────
             if state.search_enabled:
+                if thinking is not None:
+                    thinking.set_context("Searching the web…")
                 backend = self._ctx.search_registry.get_available(self._ctx.config.search_provider)
                 if backend is not None:
                     try:
@@ -923,34 +1243,106 @@ class AnythinkApp(App[int]):
                     except SearchError:
                         pass
 
+            # Replace ThinkingWidget with the real AIBubble before first token
+            if thinking is not None:
+                thinking.stop()
+                await thinking.remove()
+            conv = self.query_one(ConversationView)
+            conv.add_bubble(bubble)
+
+            if thinking is not None:
+                thinking = None  # prevent double-remove in error path
+
             chunk_stream = state.provider.stream_chat(
                 messages=_trim_history(state.history, state.context_window),
                 model=state.model_id,
+                gen_params=state.gen_params,
             )
+            _last_usage = None
             async for chunk in chunk_stream:
+                if self._stop_streaming:
+                    _was_stopped = True
+                    break
                 if chunk.text:
                     buffer += chunk.text
                     bubble.append_text(chunk.text)
                 if chunk.usage:
-                    state.total_tokens_used = chunk.usage.total_tokens
+                    # Accumulate across turns — do not overwrite
+                    state.total_tokens_used += chunk.usage.total_tokens
+                    state.tokens_estimated = False
+                    _got_usage = True
+                    _last_usage = chunk.usage
+
+            # Record spend after stream completes
+            if _last_usage is not None and self._ctx.config.spend_tracking:
+                from anythink.spend.pricing import estimate_cost
+
+                cost = estimate_cost(state.provider.name, state.model_id, _last_usage)
+                self._ctx.spend_tracker.record(
+                    session_id=state.session_id,
+                    model_id=state.model_id,
+                    provider=state.provider.name,
+                    usage=_last_usage,
+                    cost_usd=cost,
+                )
 
         except AnythinkError as exc:
+            if thinking is not None:
+                thinking.stop()
+                with contextlib.suppress(Exception):
+                    await thinking.remove()
             if state.history and state.history[-1].role == "user":
                 state.history.pop()
             if self._undo_checkpoints:
                 self._undo_checkpoints.pop()
             if self._bubble_pairs and self._bubble_pairs[-1][1] is bubble:
                 self._bubble_pairs.pop()
+            # Ensure bubble is in the conversation before showing error
+            conv = self.query_one(ConversationView)
+            with contextlib.suppress(Exception):
+                conv.add_bubble(bubble)
             bubble.show_error(exc.user_message)
+            suggestion = self._error_suggestion(exc)
+            if suggestion:
+                conv.add_bubble(
+                    SystemBubble(
+                        exc.user_message, self._ctx.theme, kind="error", suggestion=suggestion
+                    )
+                )
             self._ctx.notifier.notify(
                 "provider_failure",
                 "Anythink — Provider Error",
                 exc.user_message[:100],
             )
+            self._active_ai_bubble = None
+            with contextlib.suppress(Exception):
+                self.query_one(HintBar).set_streaming(False)
+            with contextlib.suppress(Exception):
+                self.query_one(TipsBar).stop()
             return
 
+        # Fallback: estimate token count when provider did not return usage data
+        if not _got_usage and buffer:
+            estimated = len(buffer) // 4
+            state.total_tokens_used += estimated
+            state.tokens_estimated = True
+
         duration = time.monotonic() - t0
-        bubble.finalize(buffer)
+
+        # Finalize bubble: append "stopped" marker if generation was interrupted
+        if _was_stopped:
+            bubble.finalize(buffer + "\n\n⏹ Stopped by user")
+        else:
+            bubble.finalize(buffer)
+
+        self._last_response_text = buffer
+        self._active_ai_bubble = None
+        self._stop_streaming = False
+        with contextlib.suppress(Exception):
+            self.query_one(HintBar).set_streaming(False)
+        with contextlib.suppress(Exception):
+            self.query_one(TipsBar).stop()
+
         turn_index = len(state.history)  # index of the AI message about to be appended
         state.history.append(ChatMessage(role="assistant", content=buffer))
         self._turn_bubbles[turn_index] = bubble
@@ -958,7 +1350,10 @@ class AnythinkApp(App[int]):
         if self._ctx.config.session_autosave and state.history:
             self._ctx.session_manager.save(_build_session(state))
 
-        self.query_one(HUDWidget).update_from_state(self._ctx, state)
+        hud = self.query_one(HUDWidget)
+        hud.update_from_state(self._ctx, state)
+        if self._ctx.config.spend_tracking:
+            hud.session_cost = self._ctx.spend_tracker.session_total(state.session_id)
         self._refresh_dashboard_panels()
         self._prune_history_tracking()
 
@@ -1155,3 +1550,239 @@ class AnythinkApp(App[int]):
             exclusive=False,
             exit_on_error=False,
         )
+
+    # ── V3: Multi-model comparison ─────────────────────────────────────────
+
+    async def _run_comparison(self, state: ChatState, prompt: str, aliases: list[str]) -> None:
+        """Background worker: run the same prompt against multiple models in parallel."""
+        from anythink.compare.runner import run_comparison
+        from anythink.providers.base import ChatMessage as _CM
+
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+
+        # Build the message list (include existing history context)
+        messages = _trim_history(state.history, state.context_window)
+        messages = messages + [_CM(role="user", content=prompt)]
+
+        results = await run_comparison(self._ctx, aliases, messages)
+
+        # Display each result sequentially
+        for i, r in enumerate(results, 1):
+            header = f"[{i}] {r.alias}  ({r.provider_name} / {r.model_id})"
+            if r.error:
+                body = f"Error: {r.error}"
+                conv.add_bubble(SystemBubble(f"{header}\n{body}", t, kind="error"))
+            else:
+                meta_parts = [f"{r.elapsed_s:.1f}s"]
+                if r.usage:
+                    meta_parts.append(f"{r.usage.prompt_tokens}+{r.usage.completion_tokens} tok")
+                if r.cost_usd > 0:
+                    meta_parts.append(f"~${r.cost_usd:.4f}")
+                meta = "  •  ".join(meta_parts)
+                body = r.text or "(empty response)"
+                conv.add_bubble(SystemBubble(f"══ {header}  [{meta}] ══\n{body}", t, kind="info"))
+
+                # Record spend
+                if r.usage is not None and self._ctx.config.spend_tracking:
+                    self._ctx.spend_tracker.record(
+                        session_id=state.session_id,
+                        model_id=r.model_id,
+                        provider=r.provider_name,
+                        usage=r.usage,
+                        cost_usd=r.cost_usd,
+                    )
+
+        # Store results for the pick step
+        self._pending_compare_results = results
+        self._pending_compare_pick = True
+
+        alias_picks = "  ".join(f"[{i}] {r.alias}" for i, r in enumerate(results, 1))
+        conv.add_bubble(
+            SystemBubble(
+                f"Continue with which response?\n{alias_picks}  [N] Cancel",
+                t,
+                kind="warning",
+            )
+        )
+
+    async def _handle_compare_pick(self, text: str) -> None:
+        """Process the user's pick from a completed comparison."""
+        self._pending_compare_pick = False
+        results = self._pending_compare_results
+        self._pending_compare_results = None
+
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+        state = self._state
+
+        if text.lower() in ("n", "no", "cancel", "") or results is None or state is None:
+            conv.add_bubble(
+                SystemBubble("Comparison closed. No response added to history.", t, kind="info")
+            )
+            return
+
+        try:
+            idx = int(text.strip()) - 1
+        except ValueError:
+            conv.add_bubble(
+                SystemBubble(
+                    f"Invalid pick '{text}'. Type 1-{len(results)} or N to cancel.",
+                    t,
+                    kind="error",
+                )
+            )
+            self._pending_compare_results = results
+            self._pending_compare_pick = True
+            return
+
+        if not (0 <= idx < len(results)):
+            conv.add_bubble(
+                SystemBubble(
+                    f"Pick out of range. Enter 1-{len(results)} or N to cancel.",
+                    t,
+                    kind="error",
+                )
+            )
+            self._pending_compare_results = results
+            self._pending_compare_pick = True
+            return
+
+        winner = results[idx]
+        if winner.error:
+            conv.add_bubble(
+                SystemBubble(
+                    f"Cannot continue with '{winner.alias}' — it returned an error.",
+                    t,
+                    kind="error",
+                )
+            )
+            return
+
+        # Add the prompt as user message and winner's response as assistant message
+        from anythink.providers.base import ChatMessage as _CM
+
+        state.history.append(_CM(role="user", content=winner.text or ""))
+        state.history.append(_CM(role="assistant", content=winner.text or ""))
+        self._last_response_text = winner.text or ""
+
+        if self._ctx.config.session_autosave:
+            self._ctx.session_manager.save(_build_session(state))
+
+        conv.add_bubble(
+            SystemBubble(
+                f"✓ Continuing with [{winner.alias}] response.",
+                t,
+                kind="success",
+            )
+        )
+        self.query_one(HUDWidget).update_from_state(self._ctx, state)
+
+    # ── V3: Update confirm handler ─────────────────────────────────────────
+
+    async def _handle_update_confirmation(self, text: str) -> None:
+        """Run upgrade if the user confirms."""
+        self._pending_update = False
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+
+        if text.lower() not in ("y", "yes"):
+            conv.add_bubble(SystemBubble("Upgrade cancelled.", t, kind="info"))
+            return
+
+        conv.add_bubble(SystemBubble("Upgrading Anythink…", t, kind="info"))
+        import asyncio
+
+        from anythink.updater import run_upgrade
+
+        ok, output = await asyncio.to_thread(run_upgrade)
+        if ok:
+            conv.add_bubble(
+                SystemBubble(
+                    "✓ Upgrade complete. Restart Anythink to use the new version.",
+                    t,
+                    kind="success",
+                )
+            )
+        else:
+            short_output = output[-300:] if len(output) > 300 else output
+            conv.add_bubble(SystemBubble(f"Upgrade failed:\n{short_output}", t, kind="error"))
+
+    # ── V3: Schedule run-now worker ────────────────────────────────────────
+
+    async def _run_schedule(self, schedule_name: str) -> None:
+        """Background worker: run a named schedule immediately."""
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+
+        schedule = self._ctx.schedule_manager.get(schedule_name)
+        if schedule is None:
+            conv.add_bubble(SystemBubble(f"Schedule '{schedule_name}' not found.", t, kind="error"))
+            return
+
+        conv.add_bubble(SystemBubble(f"Running schedule '{schedule_name}'…", t, kind="info"))
+
+        try:
+            alias_name = schedule.alias or self._ctx.config.default_model_alias
+            if not alias_name:
+                conv.add_bubble(
+                    SystemBubble("No model alias configured for this schedule.", t, kind="error")
+                )
+                return
+
+            alias = self._ctx.model_registry.get(alias_name)
+            if alias is None:
+                conv.add_bubble(
+                    SystemBubble(f"Model alias '{alias_name}' not found.", t, kind="error")
+                )
+                return
+
+            api_key = self._ctx.key_manager.get_key(alias.provider)
+            prov_cls = self._ctx.provider_registry.get(alias.provider)
+            if prov_cls is None:
+                conv.add_bubble(
+                    SystemBubble(f"Provider '{alias.provider}' not registered.", t, kind="error")
+                )
+                return
+
+            provider = prov_cls(api_key=api_key)
+            from anythink.providers.base import ChatMessage as _CM
+
+            messages = [_CM(role="user", content=schedule.prompt)]
+            full_text = ""
+            async for chunk in provider.stream_chat(
+                messages, alias.model_id, gen_params=alias.gen_params
+            ):
+                full_text += chunk.text
+
+            # Write to output file if configured
+            if schedule.output_file:
+                from pathlib import Path
+
+                out = Path(schedule.output_file)
+                out.parent.mkdir(parents=True, exist_ok=True)
+                with out.open("a", encoding="utf-8") as f:
+                    from datetime import datetime
+
+                    f.write(f"\n\n--- {datetime.utcnow().isoformat()} ---\n{full_text}\n")
+
+            # Update last_run
+            from datetime import datetime
+
+            self._ctx.schedule_manager.update_last_run(schedule_name, datetime.utcnow())
+
+            preview = full_text[:400] + ("…" if len(full_text) > 400 else "")
+            conv.add_bubble(
+                SystemBubble(
+                    f"✓ Schedule '{schedule_name}' completed:\n{preview}", t, kind="success"
+                )
+            )
+            self._ctx.notifier.notify(
+                "schedule_done",
+                f"Anythink — Schedule '{schedule_name}'",
+                full_text[:100],
+            )
+        except Exception as exc:
+            conv.add_bubble(
+                SystemBubble(f"Schedule '{schedule_name}' failed: {exc}", t, kind="error")
+            )

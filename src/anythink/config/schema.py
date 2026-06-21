@@ -33,6 +33,11 @@ class AppConfig:
     mouse_enabled: bool = True
     notifications: dict[str, bool] = field(default_factory=dict)  # per-type toggles
 
+    # --- V3 fields ---
+    spend_tracking: bool = True
+    spend_budget_soft_limit: float | None = None  # USD; None = no limit
+    spend_budget_period: str = "monthly"  # "daily" | "monthly"
+
     VALID_THEMES: frozenset[str] = field(
         default=frozenset({"midnight", "aurora", "ember", "arctic"}),
         init=False,

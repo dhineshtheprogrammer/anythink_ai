@@ -73,34 +73,27 @@ class TestHelpCommand:
 
 
 class TestClearCommand:
-    async def test_clear_removes_user_and_assistant_messages(
+    async def test_clear_returns_confirm_action(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        # /clear now defers state mutation to the TUI via a confirmation prompt
+        result = await registry.dispatch("/clear", ctx, state)
+        assert result.action == "clear_confirm"
+        assert result.message is not None
+        assert "[Y]" in result.message
+
+    async def test_clear_does_not_mutate_state(
         self, registry: CommandRegistry, ctx: AppContext, state: ChatState
     ) -> None:
         state.history = [
             ChatMessage(role="user", content="hello"),
             ChatMessage(role="assistant", content="hi"),
         ]
-        result = await registry.dispatch("/clear", ctx, state)
-        assert state.history == []
-        assert "cleared" in (result.message or "").lower()
-
-    async def test_clear_preserves_system_messages(
-        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
-    ) -> None:
-        state.history = [
-            ChatMessage(role="system", content="You are a pirate."),
-            ChatMessage(role="user", content="hello"),
-        ]
-        await registry.dispatch("/clear", ctx, state)
-        assert len(state.history) == 1
-        assert state.history[0].role == "system"
-
-    async def test_clear_resets_token_count(
-        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
-    ) -> None:
         state.total_tokens_used = 5000
         await registry.dispatch("/clear", ctx, state)
-        assert state.total_tokens_used == 0
+        # State must be unchanged — mutation happens in the TUI after user confirms
+        assert len(state.history) == 2
+        assert state.total_tokens_used == 5000
 
 
 class TestHistoryCommand:

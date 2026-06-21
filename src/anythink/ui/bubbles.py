@@ -162,6 +162,24 @@ class AIBubble(Static):
         self.update(panel)
 
 
+class LogoBubble(Static):
+    """Full-width bubble that displays the ASCII art startup banner."""
+
+    DEFAULT_CSS = """
+    LogoBubble {
+        margin: 0 0 1 0;
+        width: 100%;
+    }
+    """
+
+    def __init__(self, banner: str, tagline: str, theme: Theme) -> None:
+        body = Text()
+        body.append(banner, style=theme.primary)
+        body.append(f"  {tagline}\n", style=theme.secondary)
+        panel = Panel(body, border_style=theme.muted)
+        super().__init__(panel)
+
+
 class SystemBubble(Static):
     """Centered muted bubble for tool output, slash-command results, and errors."""
 
@@ -188,13 +206,15 @@ class SystemBubble(Static):
         theme: Theme,
         *,
         kind: str = "info",
+        suggestion: str | None = None,
     ) -> None:
         icon = self._ICONS.get(kind, "ℹ️")
         style = theme.error if kind == "error" else theme.muted
-        panel = Panel(
-            Text(f"{icon}  {message}", style=style),
-            border_style=theme.muted,
-        )
+        body = Text()
+        body.append(f"{icon}  {message}", style=style)
+        if suggestion:
+            body.append(f"\n   → {suggestion}", style=theme.secondary)
+        panel = Panel(body, border_style=theme.muted)
         super().__init__(panel)
         self._theme = theme
         self._kind = kind

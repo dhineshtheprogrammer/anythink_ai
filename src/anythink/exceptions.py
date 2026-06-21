@@ -83,3 +83,26 @@ class BranchError(AnythinkError):
 
 class NotificationError(AnythinkError):
     """Raised when a desktop notification cannot be delivered."""
+
+
+# --- V3 exceptions ---
+
+
+class SpendError(AnythinkError):
+    """Raised when the spend log cannot be read or written."""
+
+
+class ExportError(AnythinkError):
+    """Raised when a session export fails."""
+
+
+class ScheduleError(AnythinkError):
+    """Raised when a schedule operation fails."""
+
+
+class BatchError(AnythinkError):
+    """Raised when batch processing fails critically."""
+
+
+class UpdateError(AnythinkError):
+    """Raised when a self-update operation fails."""

@@ -60,6 +60,24 @@ class Paths:
         """Persisted vector stores (binary blobs)."""
         return self.cache_dir / "rag"
 
+    # --- V3 paths ---
+
+    @property
+    def templates_file(self) -> Path:
+        return self.config_dir / "templates.yaml"
+
+    @property
+    def schedules_file(self) -> Path:
+        return self.config_dir / "schedules.yaml"
+
+    @property
+    def exports_dir(self) -> Path:
+        return self.data_dir / "exports"
+
+    @property
+    def spend_log_file(self) -> Path:
+        return self.data_dir / "spend.yaml"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.config_dir,
@@ -70,6 +88,7 @@ class Paths:
             self.logs_dir,
             self.rag_dir,
             self.rag_cache_dir,
+            self.exports_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -99,6 +118,8 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "browse_mode": frozenset({"http", "headless"}),
     "exec_mode": frozenset({"ask", "auto"}),
     "voice_model": frozenset({"tiny", "base", "small", "medium", "large", "turbo"}),
+    # V3
+    "spend_budget_period": frozenset({"daily", "monthly"}),
 }
 
 
@@ -162,6 +183,7 @@ class ConfigManager:
         if not isinstance(notifications, dict):
             notifications = {}
 
+        spend_budget_soft_limit = raw.get("spend_budget_soft_limit")
         return AppConfig(
             default_model_alias=raw.get("default_model_alias"),
             active_theme=raw.get("active_theme", "midnight"),
@@ -183,6 +205,11 @@ class ConfigManager:
             voice_language=raw.get("voice_language"),
             mouse_enabled=bool(raw.get("mouse_enabled", True)),
             notifications=notifications,
+            spend_tracking=bool(raw.get("spend_tracking", True)),
+            spend_budget_soft_limit=(
+                float(spend_budget_soft_limit) if spend_budget_soft_limit is not None else None
+            ),
+            spend_budget_period=str(raw.get("spend_budget_period", "monthly")),
         )
 
     def save(self, config: AppConfig) -> None:
@@ -215,5 +242,11 @@ class ConfigManager:
             data["voice_language"] = config.voice_language
         # Always persist notifications dict — empty dict means "all defaults"
         data["notifications"] = dict(config.notifications)
+
+        # V3 spend fields
+        data["spend_tracking"] = config.spend_tracking
+        data["spend_budget_period"] = config.spend_budget_period
+        if config.spend_budget_soft_limit is not None:
+            data["spend_budget_soft_limit"] = config.spend_budget_soft_limit
 
         self.paths.config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=True))

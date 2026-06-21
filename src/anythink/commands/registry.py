@@ -32,6 +32,10 @@ class CommandRegistry:
         """Return sorted list of all registered command names (without leading slash)."""
         return sorted(self._commands)
 
+    def all_commands(self) -> list[SlashCommand]:
+        """Return all registered commands sorted by name."""
+        return [self._commands[k] for k in sorted(self._commands)]
+
     async def dispatch(
         self,
         raw_input: str,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from anythink.ui.bubbles import AIBubble, SystemBubble, UserBubble
-from anythink.ui.theme import MIDNIGHT, AURORA, EMBER
+from anythink.ui.theme import AURORA, EMBER, MIDNIGHT
 
 
 @pytest.fixture

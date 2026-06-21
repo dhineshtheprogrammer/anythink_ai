@@ -77,8 +77,9 @@ def _make_echo_state() -> ChatState:
 
 def _make_mock_ctx() -> object:
     """Build a MagicMock AppContext sufficient for Textual app tests."""
-    from anythink.ui.theme import MIDNIGHT
     from rich.console import Console
+
+    from anythink.ui.theme import MIDNIGHT
 
     ctx = MagicMock()
     ctx.config = AppConfig(default_model_alias="echo-1", session_autosave=False)
@@ -205,8 +206,8 @@ async def test_unconfigured_shows_error_bubble() -> None:
 @pytest.mark.asyncio
 async def test_resume_prompt_shown_for_resumable_session() -> None:
     """A resumable session should trigger a resume prompt bubble."""
-    from anythink.session.models import Session
     from anythink.providers.base import ChatMessage
+    from anythink.session.models import Session
 
     ctx = _make_mock_ctx()
     state = _make_echo_state()
@@ -230,8 +231,8 @@ async def test_resume_prompt_shown_for_resumable_session() -> None:
 @pytest.mark.asyncio
 async def test_resume_yes_loads_history() -> None:
     """Answering 'y' to the resume prompt should populate the state history."""
-    from anythink.session.models import Session
     from anythink.providers.base import ChatMessage
+    from anythink.session.models import Session
 
     ctx = _make_mock_ctx()
     state = _make_echo_state()
@@ -256,8 +257,8 @@ async def test_resume_yes_loads_history() -> None:
 @pytest.mark.asyncio
 async def test_resume_no_starts_fresh() -> None:
     """Answering 'n' should leave history empty."""
-    from anythink.session.models import Session
     from anythink.providers.base import ChatMessage
+    from anythink.session.models import Session
 
     ctx = _make_mock_ctx()
     state = _make_echo_state()
