@@ -6,6 +6,87 @@ Versions follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [3.1.0] — 2026-06-22
+
+Anythink 3.1 delivers the **V2.2 Visual Identity & Personalization** build — every theme becomes a complete, full-screen visual identity; users gain direct control over bubble style, density, avatars, and timestamps; and two long-standing visual bugs are fixed for good.
+
+### Added — V2.2 Visual Identity
+
+#### Per-Theme Background Fill
+- Each of the 4 themes (Midnight, Aurora, Ember, Arctic) now defines a `background` and `surface` hex color applied to the full screen canvas
+- `Theme` dataclass gains 3 new fields: `background` (full-screen tint), `surface` (bubble surface lift), `info` (4th semantic color)
+- `theme_css_vars()` (theme_bridge.py) now returns a `dict` and emits `$background`, `$surface`, `$panel`, `$info` alongside existing vars
+- `AnythinkApp.get_css_variables()` merges theme vars with Textual's built-in palette so `$foreground` and framework vars remain intact
+- `_apply_theme_background()` sets `Screen.styles.background` and `ConversationView.styles.background` at runtime; called on mount and on theme change
+
+#### Bubble Style Toggle — Boxed / Minimal
+- `AppConfig.bubble_style: str = "boxed"` — new field (`"boxed"` | `"minimal"`)
+- `UserBubble` and `AIBubble` refactored: `_render_boxed()` (bordered Rich Panel) and `_render_minimal()` (thin `▎` accent bar, no border, full-width layout for both roles)
+- Minimal mode: user bar colored `theme.primary`, AI bar colored `theme.accent`; footer metadata (word count, RAG sources) preserved
+
+#### Role Avatars
+- `AppConfig.show_avatars: bool = False` — new field
+- `_user_avatar(theme)` returns `⟨Y⟩` in `theme.primary`; `_ai_avatar(theme)` returns `✦` in `theme.accent`
+- Avatars render in both Boxed (panel title) and Minimal (header line) styles when enabled
+
+#### Compact Density Mode
+- `AppConfig.density: str = "comfortable"` — new field (`"comfortable"` | `"compact"`)
+- Bubbles set `styles.margin` dynamically in `on_mount()` and `_apply_density()`; zero bottom-gap in compact mode
+- Propagated retroactively on `density` setting change via `_refresh_all_bubbles()`
+
+#### Relative Timestamps with Absolute Fallback
+- New `src/anythink/ui/timestamp.py` — `format_timestamp(dt, config)` with 6 tiers: `just now` / `Xm ago` / `Xh ago` / `Yesterday, HH:MM` / `Mon D, HH:MM` / `Mon D YYYY, HH:MM`; cross-platform day formatting (`%#d` on Windows, `%-d` on POSIX)
+- `AppConfig.timestamps: str = "relative"` — new field (`"relative"` | `"absolute"`)
+- `UserBubble` and `AIBubble` store `_created_at: datetime` (raw object, not formatted string); timestamp formatted at render time
+- 60-second interval timer (`set_interval(60, _tick_timestamps)`) refreshes all visible `UserBubble` / `AIBubble` without user action
+
+#### Live Retroactive Theme Application (bug fix)
+- All bubble types (`UserBubble`, `AIBubble`, `LogoBubble`, `SystemBubble`, `CompactNotice`) now implement `refresh_visual(theme, config)` — rebuilds content with updated colors and settings
+- `on_settings_menu_changed()` calls `_refresh_all_bubbles()` for any of: `active_theme`, `bubble_style`, `density`, `show_avatars`, `timestamps`, `icon_style`
+- Theme switch also calls `refresh_css()` to update Textual CSS variables and `_apply_theme_background()` for the screen background — zero stale colors possible anywhere
+
+#### Unified Monochrome Icon Language
+- New `src/anythink/ui/icons.py` — `ICONS_UNICODE` and `ICONS_ASCII` dicts + `get_icon(key, config)` + `get_spinner_frames(config)`
+- `AppConfig.icon_style: str = "unicode"` — new field (`"unicode"` | `"ascii"`)
+- All emoji replaced across the entire app: `🔍` → `⌕`, `📚` → `⌬`, `📎` → `⎘`, `💡` → `◆`, `✅` → `✓`, `❌` → `✕`, `⚠️` → `▲`, `ℹ️` → `◈`
+- `SystemBubble` uses `_KIND_MAP` dict mapping `kind` → `(icon_key, color_role)` for consistent icon+color selection
+- HUD line 2 resolves search and RAG icons via `get_icon()`; tips bar prefix via `get_icon()`
+
+#### Collapsed Session Naming Confirmation (bug fix)
+- New `CompactNotice` widget (borderless single-line Static) replaces the stacked double-box confirmation
+- `_handle_session_naming()` removes the prompt `SystemBubble` from the DOM then mounts a `CompactNotice`: `✓ Session named: "…"` or `✓ Session named: "…"  (auto)` for auto-generated names
+
+### Fixed
+
+- **Stale theme colors after mid-session theme switch** — every bubble, the HUD, the logo, and all system messages now re-render in the new theme the instant the theme is changed; no mixed-color scrollback possible
+- **Misleading `0%` context display** — `_fmt_pct()` in `hud.py` shows `0.3%` for any non-zero sub-1% usage; flat `0%` only when the context is genuinely empty. Applied consistently to HUD, `ContextStatusBar`, and `StatsPanel`
+
+### Changed
+
+- `AppConfig` gains 5 new fields: `bubble_style`, `density`, `show_avatars`, `timestamps`, `icon_style` (all safe defaults preserve V1/V2/V3 behavior)
+- `validate_config()` in `config/manager.py` extended with enum checks for all 4 new string fields
+- `Theme` dataclass gains `background: str`, `surface: str`, `info: str` fields (all 4 themes updated)
+- `theme_css_vars()` return type changed from `str` to `dict[str, str]`; callers updated
+- `UserBubble.__init__` gains optional `config: AppConfig | None = None` param; `_timestamp` field replaced by `_created_at: datetime`
+- `AIBubble.__init__` gains optional `config: AppConfig | None = None` param; `_timestamp` field replaced by `_created_at: datetime`; `show_error()` uses monochrome warning icon
+- `LogoBubble` and `SystemBubble` store message data for `refresh_visual()` rebuilds; `SystemBubble` uses `_KIND_MAP` instead of `_ICONS` emoji dict
+- `SettingsMenu` max-height increased from 20 to 26 rows to fit 5 new entries; 5 new `_SETTINGS` entries added (Bubble style, Role avatars, Density, Timestamps, Icon style)
+- `AnythinkApp.__init__` now sets `self._ctx` before `super().__init__()` so `get_css_variables()` is available during Textual's CSS initialization
+- `_handle_session_naming()` stores `_naming_prompt_bubble` reference for DOM removal; uses `CompactNotice` instead of `SystemBubble`
+- All `UserBubble`/`AIBubble` construction sites in `app.py` updated to pass `config=self._ctx.config`
+- `TipsBar` gains `set_config(config)` public method for icon style updates
+- `_context_bar()` and `ContextStatusBar.render()` use `_fmt_pct()` for precision formatting
+- `StatsPanel.update_stats()` uses `_fmt_pct()` for context percentage
+
+### Technical
+- 1,161 tests, 1 skipped — all CI gates clean
+- 2 new modules: `src/anythink/ui/icons.py`, `src/anythink/ui/timestamp.py`
+- 16 files changed, 671 insertions, 156 deletions
+
+[3.1.0]: https://github.com/dhineshtheprogrammer/anythink_ai/releases/tag/v3.1.0
+
+---
+
 ## [3.0.0] — 2026-06-22
 
 Anythink 3.0 expands the workstation from a great chat tool into a dependable, scriptable, self-maintaining AI platform — adding cost awareness, automation, reusability, and operational maturity.

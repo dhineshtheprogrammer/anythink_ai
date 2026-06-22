@@ -3,11 +3,11 @@
 > Think anything. Ask anything.
 
 [![CI](https://github.com/dhineshtheprogrammer/anythink_ai/actions/workflows/ci.yml/badge.svg)](https://github.com/dhineshtheprogrammer/anythink_ai/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/badge/PyPI-3.0.0-blue?logo=pypi&logoColor=white)](https://pypi.org/project/anythink/3.0.0/)
+[![PyPI](https://img.shields.io/badge/PyPI-3.1.0-blue?logo=pypi&logoColor=white)](https://pypi.org/project/anythink/3.1.0/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?logo=python&logoColor=white)](https://pypi.org/project/anythink/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**Anythink 3.0** is a universal AI terminal workstation. A Textual-powered TUI that brings RAG, agentic tools, MCP, voice, notifications, a 4-panel dashboard, and now a full automation and cost-awareness layer to your terminal.
+**Anythink 3.1** is a universal AI terminal workstation. A Textual-powered TUI that brings RAG, agentic tools, MCP, voice, notifications, a 4-panel dashboard, a full automation and cost-awareness layer, and now a complete per-theme visual identity system to your terminal.
 
 ---
 
@@ -28,6 +28,17 @@
 - **Dashboard mode** (`--dashboard` or `Ctrl+D`) — 4 panels: session list, stats, file browser, RAG browser, tool output log
 - **Voice input** (`/voice`) — mic capture → local Whisper transcription → editable text in input
 - **Desktop notifications** — RAG build done, slow response, exec, browse, provider failure
+
+### V2.2 Visual Identity & Personalization
+- **Per-theme background fill** — each theme (Midnight / Aurora / Ember / Arctic) paints a full-screen near-black tinted canvas, not just colored borders
+- **Bubble Style toggle** — switch between **Boxed** (bordered panels) and **Minimal** (thin `▎` accent bar, no border, full-width transcript style) via `/settings`
+- **Role Avatars** — optional `⟨Y⟩` user glyph and `✦` AI glyph next to every message header, colored in theme tones
+- **Compact Density mode** — remove inter-bubble spacing for maximum history on screen
+- **Relative timestamps** — `just now` / `Xm ago` / `Xh ago` / `Yesterday` / absolute fallback; live 60-second tick with `/settings` absolute override
+- **Retroactive theme application** — switching theme or any visual setting instantly re-renders every existing message on screen
+- **Unified monochrome icon language** — all emoji replaced with theme-colorable Unicode glyphs (`⌕⌬▲✓✕⎘★◆`) and an ASCII-safe fallback set; no more fixed-color emoji anywhere
+- **Collapsed session naming** — the naming prompt disappears after answering, replaced by a single compact `✓ Session named:` line
+- **Exact context-% precision** — `0.3%` shown for sub-1% non-zero usage; flat `0%` only when context is genuinely empty
 
 ### V3 Capabilities
 - **Per-model generation parameters** — tune temperature, max tokens, top-p, frequency/presence penalty per alias (`/params`)
@@ -235,6 +246,14 @@ anythink scheduler list                # Show all schedules and their status
 | `/schedule remove <name>` | Delete a schedule |
 | `/schedule run <name>` | Run a schedule immediately |
 
+### V2.2 — Visual Settings
+| Command | Description |
+|---|---|
+| `/settings` | Open the interactive settings overlay |
+| `/theme <name>` | Switch theme instantly (midnight \| aurora \| ember \| arctic) |
+
+All five new visual options (Bubble Style, Role Avatars, Density, Timestamps, Icon Style) are adjustable live from the `/settings` overlay — every change takes effect immediately and retroactively across the full conversation.
+
 ### V3 — Maintenance
 | Command | Description |
 |---|---|
@@ -283,6 +302,13 @@ exec_mode: ask                  # ask | auto
 browse_mode: http               # http | headless
 browse_autonomy: ask            # ask | auto
 voice_model: base               # tiny|base|small|medium|large|turbo
+
+# V2.2 visual identity (all adjustable live via /settings)
+bubble_style: boxed             # boxed | minimal
+density: comfortable            # comfortable | compact
+show_avatars: false             # true | false
+timestamps: relative            # relative | absolute
+icon_style: unicode             # unicode | ascii
 
 # V3 spend tracking
 spend_tracking: true
