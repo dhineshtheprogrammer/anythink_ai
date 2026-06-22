@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "anythink"
-version = "3.1.0"
+version = "3.1.1"
 description = "A universal AI terminal workstation: multi-provider LLM chat, RAG, agentic tools, MCP, voice, 4-panel dashboard, spend tracking, batch processing, scheduling, and a plugin architecture."
 readme = "README.md"
 license = { file = "LICENSE" }
