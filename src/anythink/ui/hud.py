@@ -183,8 +183,10 @@ class HUDWidget(Static):
 
     def _cfg_stub(self) -> AppConfig | None:
         """Return a minimal config-like object for icon resolution."""
+
         class _Stub:
             icon_style = self._icon_style
+
         return _Stub()  # type: ignore[return-value]
 
     def _line1(self, width: int = 100) -> Text:

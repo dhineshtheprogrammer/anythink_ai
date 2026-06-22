@@ -557,8 +557,12 @@ class AnythinkApp(App[int]):
 
         # Retroactively re-render all visual elements on any appearance change
         _VISUAL_FIELDS = {
-            "active_theme", "bubble_style", "density",
-            "show_avatars", "timestamps", "icon_style",
+            "active_theme",
+            "bubble_style",
+            "density",
+            "show_avatars",
+            "timestamps",
+            "icon_style",
         }
         if event.field in _VISUAL_FIELDS:
             self._refresh_all_bubbles()
@@ -566,6 +570,7 @@ class AnythinkApp(App[int]):
         # Update tips bar icon style
         if event.field == "icon_style":
             import contextlib
+
             with contextlib.suppress(Exception):
                 self.query_one(TipsBar).set_config(self._ctx.config)
 
@@ -584,6 +589,7 @@ class AnythinkApp(App[int]):
         import contextlib
 
         from anythink.ui.theme import Theme as _Theme
+
         if not isinstance(theme, _Theme):
             return
         bg = theme.background
@@ -608,6 +614,7 @@ class AnythinkApp(App[int]):
     def _tick_timestamps(self) -> None:
         """Called every 60 s to update relative timestamps on all visible bubbles."""
         import contextlib
+
         with contextlib.suppress(Exception):
             for bubble in self.query("UserBubble, AIBubble"):
                 if hasattr(bubble, "refresh_timestamp"):

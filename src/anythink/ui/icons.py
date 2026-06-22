@@ -73,4 +73,5 @@ def get_spinner_frames(config: AppConfig | None = None) -> list[str]:
     """Return the list of spinner animation frames for the active icon style."""
     use_unicode = config is None or config.icon_style == "unicode"
     frames = ICONS_UNICODE["spinner"] if use_unicode else ICONS_ASCII["spinner"]
-    return list(frames)  # type: ignore[arg-type]
+    assert isinstance(frames, list)
+    return list(frames)

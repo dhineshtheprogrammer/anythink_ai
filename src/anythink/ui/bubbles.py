@@ -23,6 +23,7 @@ if TYPE_CHECKING:
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+
 def _surface_style(theme: Theme) -> str:
     """Rich style string that applies the theme's surface tint as a background."""
     return f"on {theme.surface}"
@@ -37,6 +38,7 @@ def _ai_avatar(theme: Theme) -> str:
 
 
 # ── UserBubble ─────────────────────────────────────────────────────────────────
+
 
 class UserBubble(Static):
     """Right-aligned bordered bubble for a user message."""
@@ -140,6 +142,7 @@ class UserBubble(Static):
 
 # ── AIBubble ───────────────────────────────────────────────────────────────────
 
+
 class AIBubble(Static):
     """Left-aligned bordered bubble for an AI response.
 
@@ -205,9 +208,7 @@ class AIBubble(Static):
         """Attach retrieval sources and refresh the bubble footer."""
         self._retrieval_results = results
         if self._buffer:
-            body: RenderableType = (
-                Markdown(self._buffer) if self._buffer.strip() else Text("")
-            )
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
             self._redraw(body)
 
     def mark_bookmarked(self) -> None:
@@ -227,9 +228,7 @@ class AIBubble(Static):
         self._theme = theme
         self._config = config
         if self._buffer:
-            body: RenderableType = (
-                Markdown(self._buffer) if self._buffer.strip() else Text("")
-            )
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
         else:
             body = Text("▍", style=theme.muted)
         self._redraw(body)
@@ -238,9 +237,7 @@ class AIBubble(Static):
     def refresh_timestamp(self) -> None:
         """Re-render with an updated relative timestamp."""
         if self._buffer:
-            body: RenderableType = (
-                Markdown(self._buffer) if self._buffer.strip() else Text("")
-            )
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
             self._redraw(body)
 
     # ── internals ──────────────────────────────────────────────────────────────
@@ -318,6 +315,7 @@ class AIBubble(Static):
 
 # ── LogoBubble ─────────────────────────────────────────────────────────────────
 
+
 class LogoBubble(Static):
     """Full-width bubble that displays the ASCII art startup banner."""
 
@@ -351,6 +349,7 @@ class LogoBubble(Static):
 
 # ── SystemBubble ───────────────────────────────────────────────────────────────
 
+
 class SystemBubble(Static):
     """Centered muted bubble for tool output, slash-command results, and errors."""
 
@@ -363,13 +362,13 @@ class SystemBubble(Static):
 
     # Maps kind → (icon key, color role name)
     _KIND_MAP: dict[str, tuple[str, str]] = {
-        "info":    ("info",    "muted"),
+        "info": ("info", "muted"),
         "success": ("success", "success"),
-        "error":   ("error",   "error"),
+        "error": ("error", "error"),
         "warning": ("warning", "warning"),
-        "search":  ("search",  "muted"),
-        "code":    ("tool",    "muted"),
-        "rag":     ("rag",     "muted"),
+        "search": ("search", "muted"),
+        "code": ("tool", "muted"),
+        "rag": ("rag", "muted"),
     }
 
     def __init__(
@@ -412,6 +411,7 @@ class SystemBubble(Static):
 
 
 # ── CompactNotice ──────────────────────────────────────────────────────────────
+
 
 class CompactNotice(Static):
     """Single-line borderless confirmation notice (used for session naming)."""

@@ -12,16 +12,16 @@ class Theme:
     """Color palette for the terminal UI."""
 
     name: str
-    primary: str     # main assistant-response text
-    secondary: str   # subtext, metadata
-    accent: str      # headers, highlights
-    muted: str       # dimmed / placeholder text
-    error: str       # error messages
-    warning: str     # warning / orange-zone context bar
-    success: str     # success messages, green-zone context bar
-    info: str        # info / neutral semantic color
+    primary: str  # main assistant-response text
+    secondary: str  # subtext, metadata
+    accent: str  # headers, highlights
+    muted: str  # dimmed / placeholder text
+    error: str  # error messages
+    warning: str  # warning / orange-zone context bar
+    success: str  # success messages, green-zone context bar
+    info: str  # info / neutral semantic color
     background: str  # full-screen canvas tint (CSS hex, e.g. "#0a0a12")
-    surface: str     # slightly lifted bubble/panel surface (CSS hex)
+    surface: str  # slightly lifted bubble/panel surface (CSS hex)
 
 
 MIDNIGHT = Theme(

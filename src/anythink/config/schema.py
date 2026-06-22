@@ -34,11 +34,11 @@ class AppConfig:
     notifications: dict[str, bool] = field(default_factory=dict)  # per-type toggles
 
     # --- V2.2 fields ---
-    bubble_style: str = "boxed"       # "boxed" | "minimal"
-    density: str = "comfortable"      # "comfortable" | "compact"
+    bubble_style: str = "boxed"  # "boxed" | "minimal"
+    density: str = "comfortable"  # "comfortable" | "compact"
     show_avatars: bool = False
-    timestamps: str = "relative"      # "relative" | "absolute"
-    icon_style: str = "unicode"       # "unicode" | "ascii"
+    timestamps: str = "relative"  # "relative" | "absolute"
+    icon_style: str = "unicode"  # "unicode" | "ascii"
 
     # --- V3 fields ---
     spend_tracking: bool = True
