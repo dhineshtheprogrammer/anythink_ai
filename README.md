@@ -3,8 +3,8 @@
 > Think anything. Ask anything.
 
 [![CI](https://github.com/dhineshtheprogrammer/anythink_ai/actions/workflows/ci.yml/badge.svg)](https://github.com/dhineshtheprogrammer/anythink_ai/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/anythink)](https://pypi.org/project/anythink/)
-[![Python](https://img.shields.io/pypi/pyversions/anythink)](https://pypi.org/project/anythink/)
+[![PyPI](https://img.shields.io/badge/PyPI-3.0.0-blue?logo=pypi&logoColor=white)](https://pypi.org/project/anythink/3.0.0/)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue?logo=python&logoColor=white)](https://pypi.org/project/anythink/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **Anythink 3.0** is a universal AI terminal workstation. A Textual-powered TUI that brings RAG, agentic tools, MCP, voice, notifications, a 4-panel dashboard, and now a full automation and cost-awareness layer to your terminal.
