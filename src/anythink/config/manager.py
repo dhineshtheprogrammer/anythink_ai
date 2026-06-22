@@ -118,6 +118,11 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "browse_mode": frozenset({"http", "headless"}),
     "exec_mode": frozenset({"ask", "auto"}),
     "voice_model": frozenset({"tiny", "base", "small", "medium", "large", "turbo"}),
+    # V2.2
+    "bubble_style": frozenset({"boxed", "minimal"}),
+    "density": frozenset({"comfortable", "compact"}),
+    "timestamps": frozenset({"relative", "absolute"}),
+    "icon_style": frozenset({"unicode", "ascii"}),
     # V3
     "spend_budget_period": frozenset({"daily", "monthly"}),
 }

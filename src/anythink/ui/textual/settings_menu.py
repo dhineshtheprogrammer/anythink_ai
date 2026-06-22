@@ -20,6 +20,12 @@ if TYPE_CHECKING:
 _SETTINGS: list[tuple[str, str, list[str] | None]] = [
     # Appearance
     ("Theme", "active_theme", ["midnight", "aurora", "ember", "arctic"]),
+    # V2.2: Visual identity
+    ("Bubble style",    "bubble_style",  ["boxed", "minimal"]),
+    ("Role avatars",    "show_avatars",  ["on", "off"]),
+    ("Density",         "density",       ["comfortable", "compact"]),
+    ("Timestamps",      "timestamps",    ["relative", "absolute"]),
+    ("Icon style",      "icon_style",    ["unicode", "ascii"]),
     # Model & Defaults
     ("Default model alias", "default_model_alias", None),
     # Tools & Agent Behaviour
@@ -99,7 +105,7 @@ class SettingsMenu(Widget):
     DEFAULT_CSS = """
     SettingsMenu {
         height: auto;
-        max-height: 20;
+        max-height: 26;
         border: solid $accent;
         background: $surface;
         display: none;

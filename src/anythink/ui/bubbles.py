@@ -11,12 +11,32 @@ from rich.panel import Panel
 from rich.text import Text
 from textual.widgets import Static
 
+from anythink.ui.icons import get_icon
 from anythink.ui.length import length_indicator
 from anythink.ui.theme import Theme
+from anythink.ui.timestamp import format_timestamp
 
 if TYPE_CHECKING:
+    from anythink.config.schema import AppConfig
     from anythink.rag.models import RetrievalResult
 
+
+# ── helpers ────────────────────────────────────────────────────────────────────
+
+def _surface_style(theme: Theme) -> str:
+    """Rich style string that applies the theme's surface tint as a background."""
+    return f"on {theme.surface}"
+
+
+def _user_avatar(theme: Theme) -> str:
+    return f"[{theme.primary}]⟨Y⟩[/]"
+
+
+def _ai_avatar(theme: Theme) -> str:
+    return f"[{theme.accent}]✦[/]"
+
+
+# ── UserBubble ─────────────────────────────────────────────────────────────────
 
 class UserBubble(Static):
     """Right-aligned bordered bubble for a user message."""
@@ -33,23 +53,92 @@ class UserBubble(Static):
         text: str,
         theme: Theme,
         attachments: list[str] | None = None,
+        config: AppConfig | None = None,
     ) -> None:
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        lines: list[str] = [text]
-        for name in attachments or []:
-            lines.append(f"\U0001f4ce {name}")
-        body = "\n".join(lines)
-        panel = Panel(
-            Text(body),
-            title="[b]You[/b]",
-            title_align="left",
-            subtitle=f"[dim]{timestamp}[/dim]",
-            subtitle_align="right",
-            border_style=theme.primary,
-        )
-        super().__init__(panel)
+        self._text = text
+        self._attachments = attachments or []
+        self._created_at = datetime.now()
         self._theme = theme
+        self._config = config
+        super().__init__("")
 
+    def on_mount(self) -> None:
+        self._rebuild()
+        self._apply_density()
+
+    # ── public API ─────────────────────────────────────────────────────────────
+
+    def refresh_visual(self, theme: Theme, config: AppConfig | None = None) -> None:
+        """Re-render with updated theme and config (called on settings change)."""
+        self._theme = theme
+        self._config = config
+        self._rebuild()
+        self._apply_density()
+
+    def refresh_timestamp(self) -> None:
+        """Re-render with an updated relative timestamp (called by the 60s ticker)."""
+        self._rebuild()
+
+    # ── internals ──────────────────────────────────────────────────────────────
+
+    def _rebuild(self) -> None:
+        self.update(self._make_renderable())
+
+    def _apply_density(self) -> None:
+        if self._config is not None and self._config.density == "compact":
+            self.styles.margin = (0, 0, 0, 14)
+        else:
+            self.styles.margin = (0, 0, 1, 14)
+
+    def _make_renderable(self) -> RenderableType:
+        t = self._theme
+        cfg = self._config
+        ts = format_timestamp(self._created_at, cfg)
+
+        if cfg is not None and cfg.bubble_style == "minimal":
+            return self._render_minimal(t, cfg, ts)
+        return self._render_boxed(t, cfg, ts)
+
+    def _render_boxed(self, t: Theme, cfg: AppConfig | None, ts: str) -> RenderableType:
+        show_avatars = cfg is not None and cfg.show_avatars
+        role_label = f"{_user_avatar(t)} You" if show_avatars else "You"
+        title = f"[b]{role_label}[/b]"
+
+        lines: list[str] = [self._text]
+        for name in self._attachments:
+            icon = get_icon("attachment", cfg)
+            lines.append(f"{icon} {name}")
+        body = "\n".join(lines)
+
+        return Panel(
+            Text(body),
+            title=title,
+            title_align="left",
+            subtitle=f"[dim]{ts}[/dim]",
+            subtitle_align="right",
+            border_style=t.primary,
+            style=_surface_style(t),
+        )
+
+    def _render_minimal(self, t: Theme, cfg: AppConfig | None, ts: str) -> RenderableType:
+        show_avatars = cfg is not None and cfg.show_avatars
+        role = f"{_user_avatar(t)} You" if show_avatars else "You"
+
+        header = Text()
+        header.append("▎", style=t.primary)
+        header.append(role, style=t.primary)
+        header.append(f"  {ts}", style=t.muted)
+
+        lines: list[str] = [f"  {self._text}"]
+        for name in self._attachments:
+            icon = get_icon("attachment", cfg)
+            lines.append(f"  {icon} {name}")
+        body = Text("\n".join(lines))
+
+        return Group(header, body)
+
+
+# ── AIBubble ───────────────────────────────────────────────────────────────────
 
 class AIBubble(Static):
     """Left-aligned bordered bubble for an AI response.
@@ -72,26 +161,24 @@ class AIBubble(Static):
         model_alias: str = "",
         provider: str = "",
         is_bookmarked: bool = False,
+        config: AppConfig | None = None,
     ) -> None:
         self._theme = theme
+        self._config = config
         self._model_alias = model_alias or "AI"
         self._provider = provider
-        self._timestamp = datetime.now().strftime("%H:%M:%S")
+        self._created_at = datetime.now()
         self._buffer = ""
-        self._length_suffix = ""  # set by finalize(); empty during streaming
+        self._length_suffix = ""
         self._is_bookmarked = is_bookmarked
         self._retrieval_results: list[RetrievalResult] = []
-        panel = Panel(
-            Text("▍", style=theme.muted),
-            title=self._make_title(),
-            title_align="left",
-            subtitle=f"[dim]{self._provider} · {self._timestamp}[/dim]",
-            subtitle_align="right",
-            border_style=theme.accent,
-        )
-        super().__init__(panel)
+        # Initial streaming placeholder
+        super().__init__(Text("▍", style=theme.muted))
 
-    # ── streaming helpers ──────────────────────────────────────────────────
+    def on_mount(self) -> None:
+        self._apply_density()
+
+    # ── streaming helpers ──────────────────────────────────────────────────────
 
     def append_text(self, chunk: str) -> None:
         """Append a streaming chunk and refresh with accumulated plain text."""
@@ -111,14 +198,16 @@ class AIBubble(Static):
     def show_error(self, message: str) -> None:
         """Replace the bubble content with an error message."""
         self._length_suffix = ""
-        self._redraw(Text(f"⚠  {message}", style=self._theme.error))
+        icon = get_icon("warning", self._config)
+        self._redraw(Text(f"{icon}  {message}", style=self._theme.error))
 
     def set_retrieval_results(self, results: list[RetrievalResult]) -> None:
         """Attach retrieval sources and refresh the bubble footer."""
         self._retrieval_results = results
-        # Re-render the current buffer with the new footer
         if self._buffer:
-            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
+            body: RenderableType = (
+                Markdown(self._buffer) if self._buffer.strip() else Text("")
+            )
             self._redraw(body)
 
     def mark_bookmarked(self) -> None:
@@ -131,36 +220,103 @@ class AIBubble(Static):
         self._is_bookmarked = False
         self._redraw(Text(self._buffer, style=self._theme.primary) if self._buffer else Text(""))
 
+    # ── public API ─────────────────────────────────────────────────────────────
+
+    def refresh_visual(self, theme: Theme, config: AppConfig | None = None) -> None:
+        """Re-render with updated theme and config (called on settings change)."""
+        self._theme = theme
+        self._config = config
+        if self._buffer:
+            body: RenderableType = (
+                Markdown(self._buffer) if self._buffer.strip() else Text("")
+            )
+        else:
+            body = Text("▍", style=theme.muted)
+        self._redraw(body)
+        self._apply_density()
+
+    def refresh_timestamp(self) -> None:
+        """Re-render with an updated relative timestamp."""
+        if self._buffer:
+            body: RenderableType = (
+                Markdown(self._buffer) if self._buffer.strip() else Text("")
+            )
+            self._redraw(body)
+
+    # ── internals ──────────────────────────────────────────────────────────────
+
+    def _apply_density(self) -> None:
+        if self._config is not None and self._config.density == "compact":
+            self.styles.margin = (0, 14, 0, 0)
+        else:
+            self.styles.margin = (0, 14, 1, 0)
+
     def _make_title(self) -> str:
+        t = self._theme
+        cfg = self._config
         star = " ✦" if self._is_bookmarked else ""
-        return f"[b]{self._model_alias}[/b]{star}"
+        show_avatars = cfg is not None and cfg.show_avatars
+        avatar = f"{_ai_avatar(t)} " if show_avatars else ""
+        return f"[b]{avatar}{self._model_alias}[/b]{star}"
+
+    def _make_subtitle(self) -> str:
+        ts = format_timestamp(self._created_at, self._config)
+        sub = f"[dim]{self._provider} · {ts}[/dim]"
+        if self._length_suffix:
+            sub += f"  [dim]{self._length_suffix}[/dim]"
+        return sub
 
     def _redraw(self, body: RenderableType) -> None:
-        subtitle = f"[dim]{self._provider} · {self._timestamp}[/dim]"
-        if self._length_suffix:
-            subtitle += f"  [dim]{self._length_suffix}[/dim]"
+        t = self._theme
+        cfg = self._config
 
-        # Attach RAG retrieval footer when sources are available
         if self._retrieval_results:
             n = len(self._retrieval_results)
+            icon = get_icon("rag_footer", cfg)
+            s = "s" if n != 1 else ""
             footer_text = Text(
-                f"\n\U0001f4da Retrieved from {n} source{'s' if n != 1 else ''}",
-                style=self._theme.muted,
+                f"\n{icon} Retrieved from {n} source{s}",
+                style=t.muted,
             )
             content: RenderableType = Group(body, footer_text)
         else:
             content = body
 
-        panel = Panel(
+        if cfg is not None and cfg.bubble_style == "minimal":
+            self.update(self._render_minimal(content, t, cfg))
+        else:
+            self.update(self._render_boxed(content, t))
+
+    def _render_boxed(self, content: RenderableType, t: Theme) -> RenderableType:
+        return Panel(
             content,
             title=self._make_title(),
             title_align="left",
-            subtitle=subtitle,
+            subtitle=self._make_subtitle(),
             subtitle_align="right",
-            border_style=self._theme.accent,
+            border_style=t.accent,
+            style=_surface_style(t),
         )
-        self.update(panel)
 
+    def _render_minimal(
+        self, content: RenderableType, t: Theme, cfg: AppConfig | None
+    ) -> RenderableType:
+        ts = format_timestamp(self._created_at, cfg)
+        show_avatars = cfg is not None and cfg.show_avatars
+        avatar_part = f"{_ai_avatar(t)} " if show_avatars else ""
+        star = " ✦" if self._is_bookmarked else ""
+
+        header = Text()
+        header.append("▎", style=t.accent)
+        header.append(f"{avatar_part}{self._model_alias}{star}", style=t.accent)
+        header.append(f"  {self._provider} · {ts}", style=t.muted)
+        if self._length_suffix:
+            header.append(f"  {self._length_suffix}", style=t.muted)
+
+        return Group(header, content)
+
+
+# ── LogoBubble ─────────────────────────────────────────────────────────────────
 
 class LogoBubble(Static):
     """Full-width bubble that displays the ASCII art startup banner."""
@@ -173,12 +329,27 @@ class LogoBubble(Static):
     """
 
     def __init__(self, banner: str, tagline: str, theme: Theme) -> None:
-        body = Text()
-        body.append(banner, style=theme.primary)
-        body.append(f"  {tagline}\n", style=theme.secondary)
-        panel = Panel(body, border_style=theme.muted)
-        super().__init__(panel)
+        self._banner = banner
+        self._tagline = tagline
+        self._theme = theme
+        super().__init__("")
 
+    def on_mount(self) -> None:
+        self._rebuild()
+
+    def refresh_visual(self, theme: Theme, config: AppConfig | None = None) -> None:
+        self._theme = theme
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        t = self._theme
+        body = Text()
+        body.append(self._banner, style=t.primary)
+        body.append(f"  {self._tagline}\n", style=t.secondary)
+        self.update(Panel(body, border_style=t.muted, style=_surface_style(t)))
+
+
+# ── SystemBubble ───────────────────────────────────────────────────────────────
 
 class SystemBubble(Static):
     """Centered muted bubble for tool output, slash-command results, and errors."""
@@ -190,14 +361,15 @@ class SystemBubble(Static):
     }
     """
 
-    _ICONS: dict[str, str] = {
-        "info": "ℹ️",
-        "success": "✅",
-        "error": "❌",
-        "warning": "⚠️",
-        "search": "\U0001f50d",
-        "code": "⚙️",
-        "rag": "\U0001f4da",
+    # Maps kind → (icon key, color role name)
+    _KIND_MAP: dict[str, tuple[str, str]] = {
+        "info":    ("info",    "muted"),
+        "success": ("success", "success"),
+        "error":   ("error",   "error"),
+        "warning": ("warning", "warning"),
+        "search":  ("search",  "muted"),
+        "code":    ("tool",    "muted"),
+        "rag":     ("rag",     "muted"),
     }
 
     def __init__(
@@ -207,14 +379,68 @@ class SystemBubble(Static):
         *,
         kind: str = "info",
         suggestion: str | None = None,
+        config: AppConfig | None = None,
     ) -> None:
-        icon = self._ICONS.get(kind, "ℹ️")
-        style = theme.error if kind == "error" else theme.muted
-        body = Text()
-        body.append(f"{icon}  {message}", style=style)
-        if suggestion:
-            body.append(f"\n   → {suggestion}", style=theme.secondary)
-        panel = Panel(body, border_style=theme.muted)
-        super().__init__(panel)
-        self._theme = theme
+        self._message = message
         self._kind = kind
+        self._suggestion = suggestion
+        self._theme = theme
+        self._config = config
+        super().__init__("")
+
+    def on_mount(self) -> None:
+        self._rebuild()
+
+    def refresh_visual(self, theme: Theme, config: AppConfig | None = None) -> None:
+        self._theme = theme
+        self._config = config
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        t = self._theme
+        cfg = self._config
+        icon_key, color_role = self._KIND_MAP.get(self._kind, ("info", "muted"))
+        icon = get_icon(icon_key, cfg)
+        style = getattr(t, color_role, t.muted)
+
+        body = Text()
+        body.append(f"{icon}  {self._message}", style=style)
+        if self._suggestion:
+            body.append(f"\n   → {self._suggestion}", style=t.secondary)
+
+        self.update(Panel(body, border_style=t.muted, style=_surface_style(t)))
+
+
+# ── CompactNotice ──────────────────────────────────────────────────────────────
+
+class CompactNotice(Static):
+    """Single-line borderless confirmation notice (used for session naming)."""
+
+    DEFAULT_CSS = """
+    CompactNotice {
+        margin: 0 2 0 2;
+        height: 1;
+    }
+    """
+
+    def __init__(self, message: str, theme: Theme, config: AppConfig | None = None) -> None:
+        self._message = message
+        self._theme = theme
+        self._config = config
+        super().__init__("")
+
+    def on_mount(self) -> None:
+        self._rebuild()
+
+    def refresh_visual(self, theme: Theme, config: AppConfig | None = None) -> None:
+        self._theme = theme
+        self._config = config
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        t = self._theme
+        icon = get_icon("success", self._config)
+        line = Text()
+        line.append(f" {icon} ", style=t.success)
+        line.append(self._message, style=t.muted)
+        self.update(line)

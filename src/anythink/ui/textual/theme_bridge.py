@@ -35,14 +35,23 @@ def resolve(rich_color: str) -> str:
     return _RICH_TO_HEX.get(rich_color, rich_color)
 
 
-def theme_css_vars(theme: Theme) -> str:
-    """Return a Textual CSS snippet declaring $primary / $accent / $muted etc."""
-    return (
-        f"$primary: {resolve(theme.primary)};\n"
-        f"$secondary: {resolve(theme.secondary)};\n"
-        f"$accent: {resolve(theme.accent)};\n"
-        f"$muted: {resolve(theme.muted)};\n"
-        f"$error: {resolve(theme.error)};\n"
-        f"$warning: {resolve(theme.warning)};\n"
-        f"$success: {resolve(theme.success)};\n"
-    )
+def theme_css_vars(theme: Theme) -> dict[str, str]:
+    """Return CSS variable values for all theme tokens.
+
+    The returned dict maps variable names (without ``$``) to CSS color strings.
+    Pass to Textual's ``get_css_variables()`` override.
+    """
+    return {
+        "primary": resolve(theme.primary),
+        "secondary": resolve(theme.secondary),
+        "accent": resolve(theme.accent),
+        "muted": resolve(theme.muted),
+        "error": resolve(theme.error),
+        "warning": resolve(theme.warning),
+        "success": resolve(theme.success),
+        "info": resolve(theme.info),
+        # background and surface are already hex strings
+        "background": theme.background,
+        "surface": theme.surface,
+        "panel": theme.surface,
+    }

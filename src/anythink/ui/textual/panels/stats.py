@@ -8,6 +8,8 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
+from anythink.ui.hud import _fmt_pct
+
 if TYPE_CHECKING:
     from anythink.app.chat import ChatState
     from anythink.app.context import AppContext
@@ -49,7 +51,7 @@ class StatsPanel(Widget):
             total = state.context_window
             pct = (used / total * 100) if total > 0 else 0.0
             lines.append(f"Tokens:    {used:,}/{total:,}")
-            lines.append(f"           ({pct:.0f}% used)")
+            lines.append(f"           ({_fmt_pct(pct / 100)} used)")
             lines.append(f"History:   {len(state.history)} msg(s)")
             lines.append(f"Branch:    {state.active_branch}")
             if state.session_name:

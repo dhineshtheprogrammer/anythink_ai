@@ -26,8 +26,9 @@ from anythink.notify.notifier import SLOW_EXEC_S, SLOW_RESPONSE_S
 from anythink.providers.base import ChatMessage, ContentPart, TextPart
 from anythink.session.manager import auto_session_name
 from anythink.ui.banner import _BANNER
-from anythink.ui.bubbles import AIBubble, LogoBubble, SystemBubble, UserBubble
+from anythink.ui.bubbles import AIBubble, CompactNotice, LogoBubble, SystemBubble, UserBubble
 from anythink.ui.hud import HUDWidget
+from anythink.ui.icons import get_icon
 from anythink.ui.startup import find_resumable_session, is_returning_user
 from anythink.ui.textual.conversation import ConversationView
 from anythink.ui.textual.hint_bar import HintBar
@@ -38,7 +39,7 @@ from anythink.ui.textual.panels.session_list import SessionListPanel
 from anythink.ui.textual.panels.stats import StatsPanel
 from anythink.ui.textual.panels.tool_output import ToolOutputTab
 from anythink.ui.textual.settings_menu import SettingsMenu
-from anythink.ui.textual.theme_bridge import resolve
+from anythink.ui.textual.theme_bridge import resolve, theme_css_vars
 from anythink.ui.textual.thinking_widget import ThinkingWidget
 from anythink.ui.textual.tips_bar import TipsBar
 
@@ -111,9 +112,19 @@ class AnythinkApp(App[int]):
     }
     """
 
+    def get_css_variables(self) -> dict[str, str]:
+        """Inject per-theme CSS variables so $accent, $background etc. follow the theme.
+
+        Merges with Textual's built-in variables so $foreground and other
+        framework-level vars remain available.
+        """
+        base = super().get_css_variables()
+        base.update(theme_css_vars(self._ctx.theme))
+        return base
+
     def __init__(self, ctx: AppContext, *, dashboard: bool = False) -> None:
+        self._ctx = ctx  # set before super().__init__() so get_css_variables() can read it
         super().__init__()
-        self._ctx = ctx
         self._state: ChatState | None = None
         self._cmd_registry: CommandRegistry = CommandRegistry.from_entry_points()
         self._dashboard_mode: bool = dashboard
@@ -145,6 +156,7 @@ class AnythinkApp(App[int]):
         self._stop_streaming: bool = False
         self._active_ai_bubble: AIBubble | None = None
         self._last_response_text: str = ""
+        self._naming_prompt_bubble: SystemBubble | None = None
 
         # ── V3 state ───────────────────────────────────────────────────────
         # Compare mode: aliases set by /compare; cleared once comparison fires
@@ -183,8 +195,14 @@ class AnythinkApp(App[int]):
         ia.configure(list(self._cmd_registry.all_commands()), t)
         self.query_one(Input).focus()
 
+        # Apply per-theme background fill to the screen and conversation area
+        self._apply_theme_background(t)
+
         if self._dashboard_mode:
             self._apply_dashboard_layout(True)
+
+        # Start the 60-second timestamp refresh ticker
+        self.set_interval(60, self._tick_timestamps)
 
         from anythink.app.chat import ChatApp
 
@@ -204,6 +222,7 @@ class AnythinkApp(App[int]):
                     "No model configured. Run `anythink model add` to get started.",
                     t,
                     kind="error",
+                    config=self._ctx.config,
                 )
             )
             return
@@ -221,6 +240,7 @@ class AnythinkApp(App[int]):
                         f'↩ Resume last session? "{label}"  [Y/n]',
                         t,
                         kind="info",
+                        config=self._ctx.config,
                     )
                 )
                 return  # skip naming prompt while resume is pending
@@ -229,13 +249,14 @@ class AnythinkApp(App[int]):
         self._naming_mode = True
         inp = self.query_one(Input)
         inp.placeholder = _INPUT_PLACEHOLDER_NAMING
-        conv.add_bubble(
-            SystemBubble(
-                "Name this session?  (press Enter to auto-name)",
-                t,
-                kind="info",
-            )
+        naming_bubble = SystemBubble(
+            "Name this session?  (press Enter to auto-name)",
+            t,
+            kind="info",
+            config=self._ctx.config,
         )
+        self._naming_prompt_bubble = naming_bubble
+        conv.add_bubble(naming_bubble)
 
     # ── message handlers ───────────────────────────────────────────────────
 
@@ -310,7 +331,7 @@ class AnythinkApp(App[int]):
         conv = self.query_one(ConversationView)
 
         if text.startswith("/"):
-            conv.add_bubble(UserBubble(text, t))
+            conv.add_bubble(UserBubble(text, t, config=self._ctx.config))
             await self._dispatch_command(text)
             return
 
@@ -324,7 +345,7 @@ class AnythinkApp(App[int]):
         if self._pending_compare_aliases is not None:
             aliases = self._pending_compare_aliases
             self._pending_compare_aliases = None
-            conv.add_bubble(UserBubble(text, t))
+            conv.add_bubble(UserBubble(text, t, config=self._ctx.config))
             conv.add_bubble(
                 SystemBubble(
                     f"Comparing {len(aliases)} models for this prompt…",
@@ -358,14 +379,19 @@ class AnythinkApp(App[int]):
             user_msg = ChatMessage(role="user", content=text)
         state.history.append(user_msg)
 
-        user_bub = UserBubble(text, t)
+        user_bub = UserBubble(text, t, config=self._ctx.config)
         conv.add_bubble(user_bub)
 
         # ThinkingWidget is a temporary placeholder; _stream_response replaces it
         thinking = ThinkingWidget(t)
         conv.add_bubble(thinking)
 
-        bubble = AIBubble(t, model_alias=state.model_id, provider=state.provider.display_name)
+        bubble = AIBubble(
+            t,
+            model_alias=state.model_id,
+            provider=state.provider.display_name,
+            config=self._ctx.config,
+        )
         self._bubble_pairs.append((user_bub, bubble))
 
         import contextlib
@@ -513,17 +539,35 @@ class AnythinkApp(App[int]):
 
     def on_settings_menu_changed(self, event: SettingsMenu.Changed) -> None:
         """Sync runtime state immediately when a config value is saved from settings."""
-        if self._state is None:
-            return
-        if event.field == "web_search_enabled":
+        if event.field == "web_search_enabled" and self._state is not None:
             self._state.search_enabled = self._ctx.config.web_search_enabled
+
         if event.field == "active_theme":
             from anythink.ui.theme import get_theme
 
             new_theme = get_theme(self._ctx.config.active_theme)
             self._ctx.theme = new_theme
             self.query_one(HUDWidget)._theme = new_theme
-        self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+            # Update CSS variables and refresh screen background
+            self.refresh_css()
+            self._apply_theme_background(new_theme)
+
+        if self._state is not None:
+            self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+
+        # Retroactively re-render all visual elements on any appearance change
+        _VISUAL_FIELDS = {
+            "active_theme", "bubble_style", "density",
+            "show_avatars", "timestamps", "icon_style",
+        }
+        if event.field in _VISUAL_FIELDS:
+            self._refresh_all_bubbles()
+
+        # Update tips bar icon style
+        if event.field == "icon_style":
+            import contextlib
+            with contextlib.suppress(Exception):
+                self.query_one(TipsBar).set_config(self._ctx.config)
 
     def on_settings_menu_closed(self, event: SettingsMenu.Closed) -> None:
         """Return focus to the input after the settings overlay is dismissed."""
@@ -532,6 +576,42 @@ class AnythinkApp(App[int]):
             # Final sync: ensure runtime state matches whatever was saved
             self._state.search_enabled = self._ctx.config.web_search_enabled
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+
+    # ── V2.2 visual helpers ────────────────────────────────────────────────────
+
+    def _apply_theme_background(self, theme: object) -> None:
+        """Set Screen and ConversationView background to the theme's tinted canvas."""
+        import contextlib
+
+        from anythink.ui.theme import Theme as _Theme
+        if not isinstance(theme, _Theme):
+            return
+        bg = theme.background
+        with contextlib.suppress(Exception):
+            self.screen.styles.background = bg
+        with contextlib.suppress(Exception):
+            self.query_one(ConversationView).styles.background = bg
+
+    def _refresh_all_bubbles(self) -> None:
+        """Retroactively re-render every visible bubble with the current theme and config."""
+        import contextlib
+
+        t = self._ctx.theme
+        cfg = self._ctx.config
+        bubble_types = (UserBubble, AIBubble, SystemBubble, LogoBubble, CompactNotice)
+        _selector = "UserBubble, AIBubble, SystemBubble, LogoBubble, CompactNotice"
+        with contextlib.suppress(Exception):
+            for bubble in self.query(_selector):
+                if isinstance(bubble, bubble_types) and hasattr(bubble, "refresh_visual"):
+                    bubble.refresh_visual(t, cfg)
+
+    def _tick_timestamps(self) -> None:
+        """Called every 60 s to update relative timestamps on all visible bubbles."""
+        import contextlib
+        with contextlib.suppress(Exception):
+            for bubble in self.query("UserBubble, AIBubble"):
+                if hasattr(bubble, "refresh_timestamp"):
+                    bubble.refresh_timestamp()
 
     def on_session_list_panel_session_selected(
         self, event: SessionListPanel.SessionSelected
@@ -576,13 +656,16 @@ class AnythinkApp(App[int]):
         for i in range(0, len(non_sys), 2):
             user_msg = non_sys[i]
             u_text = user_msg.content if isinstance(user_msg.content, str) else "…"
-            user_bub = UserBubble(u_text, t)
+            user_bub = UserBubble(u_text, t, config=self._ctx.config)
             await conv.mount(user_bub)
             if i + 1 < len(non_sys):
                 ai_msg = non_sys[i + 1]
                 a_text = ai_msg.content if isinstance(ai_msg.content, str) else "…"
                 ai_bub = AIBubble(
-                    t, model_alias=state.model_id, provider=state.provider.display_name
+                    t,
+                    model_alias=state.model_id,
+                    provider=state.provider.display_name,
+                    config=self._ctx.config,
                 )
                 ai_bub.finalize(a_text)
                 await conv.mount(ai_bub)
@@ -669,12 +752,27 @@ class AnythinkApp(App[int]):
         t = self._ctx.theme
         conv = self.query_one(ConversationView)
 
-        name = text.strip() if text.strip() else auto_session_name(self._state.model_id)
+        typed = text.strip()
+        auto = not bool(typed)
+        name = typed if typed else auto_session_name(self._state.model_id)
         self._state.session_name = name
         self._naming_mode = False
         self.query_one(Input).placeholder = _INPUT_PLACEHOLDER_DEFAULT
         self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
-        conv.add_bubble(SystemBubble(f'Session named: "{name}"', t, kind="success"))
+
+        # Remove the prompt bubble and show a single compact confirmation line
+        if self._naming_prompt_bubble is not None:
+            await self._naming_prompt_bubble.remove()
+            self._naming_prompt_bubble = None
+
+        suffix = "  (auto)" if auto else ""
+        conv.add_bubble(
+            CompactNotice(
+                f'Session named: "{name}"{suffix}',
+                t,
+                config=self._ctx.config,
+            )
+        )
 
     async def _handle_undo_confirmation(self, text: str) -> None:
         """Execute undo if confirmed, or cancel."""
@@ -947,7 +1045,7 @@ class AnythinkApp(App[int]):
         for i in range(0, len(non_sys), 2):
             user_msg = non_sys[i]
             u_text = user_msg.content if isinstance(user_msg.content, str) else "…"
-            user_bub = UserBubble(u_text, t)
+            user_bub = UserBubble(u_text, t, config=self._ctx.config)
             await conv.mount(user_bub)
 
             if i + 1 < len(non_sys):
@@ -958,6 +1056,7 @@ class AnythinkApp(App[int]):
                     t,
                     model_alias=state.model_id,
                     provider=state.provider.display_name,
+                    config=self._ctx.config,
                 )
                 ai_bub.finalize(a_text)
                 await conv.mount(ai_bub)
@@ -966,7 +1065,8 @@ class AnythinkApp(App[int]):
                 self._turn_bubbles[turn_idx] = ai_bub
 
         conv.scroll_end(animate=False)
-        conv.add_bubble(SystemBubble(f"🌿 Switched to {branch_name!r}.", t, kind="info"))
+        icon = get_icon("branch", self._ctx.config)
+        conv.add_bubble(SystemBubble(f"{icon} Switched to {branch_name!r}.", t, kind="info"))
 
         # Update HUD
         hud = self.query_one(HUDWidget)
@@ -1446,7 +1546,12 @@ class AnythinkApp(App[int]):
         self._undo_checkpoints.append(len(state.history))
         state.history.append(ChatMessage(role="user", content=result_ctx))
 
-        ai_bubble = AIBubble(t, model_alias=state.model_id, provider=state.provider.display_name)
+        ai_bubble = AIBubble(
+            t,
+            model_alias=state.model_id,
+            provider=state.provider.display_name,
+            config=self._ctx.config,
+        )
         conv.add_bubble(ai_bubble)
         self._bubble_pairs.append((ai_bubble, ai_bubble))  # placeholder for undo tracking
 
@@ -1499,7 +1604,12 @@ class AnythinkApp(App[int]):
         self._undo_checkpoints.append(len(state.history))
         state.history.append(ChatMessage(role="user", content=result_ctx))
 
-        ai_bubble = AIBubble(t, model_alias=state.model_id, provider=state.provider.display_name)
+        ai_bubble = AIBubble(
+            t,
+            model_alias=state.model_id,
+            provider=state.provider.display_name,
+            config=self._ctx.config,
+        )
         conv.add_bubble(ai_bubble)
         self._bubble_pairs.append((ai_bubble, ai_bubble))  # placeholder for undo tracking
 
@@ -1541,7 +1651,12 @@ class AnythinkApp(App[int]):
         self._undo_checkpoints.append(len(state.history))
         state.history.append(ChatMessage(role="user", content=result_ctx))
 
-        ai_bub = AIBubble(t, model_alias=state.model_id, provider=state.provider.display_name)
+        ai_bub = AIBubble(
+            t,
+            model_alias=state.model_id,
+            provider=state.provider.display_name,
+            config=self._ctx.config,
+        )
         conv.add_bubble(ai_bub)
         self._bubble_pairs.append((ai_bub, ai_bub))
 

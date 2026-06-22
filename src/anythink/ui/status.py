@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 
 from rich.text import Text
 
+from anythink.ui.hud import _fmt_pct
 from anythink.ui.theme import Theme
 
 
@@ -42,5 +43,5 @@ class ContextStatusBar:
 
         t = Text()
         t.append(f"[{bar}] ", style=color)
-        t.append(f"Context {pct:.0%} ({used_tokens:,}/{self.max_tokens:,})", style=color)
+        t.append(f"Context {_fmt_pct(pct)} ({used_tokens:,}/{self.max_tokens:,})", style=color)
         return t

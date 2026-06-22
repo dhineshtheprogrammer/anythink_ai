@@ -8,10 +8,13 @@ from typing import TYPE_CHECKING
 from rich.text import Text
 from textual.widgets import Static
 
+from anythink.ui.icons import get_icon
 from anythink.ui.theme import Theme
 
 if TYPE_CHECKING:
     from textual.timer import Timer
+
+    from anythink.config.schema import AppConfig
 
 _TIPS = [
     "Use /model to switch between your saved models.",
@@ -43,6 +46,7 @@ class TipsBar(Static):
     def __init__(self, theme: Theme, **kwargs: object) -> None:
         super().__init__("", **kwargs)  # type: ignore[arg-type]
         self._theme = theme
+        self._config: AppConfig | None = None
         self._tip_idx = 0
         self._timer: Timer | None = None
         self._shuffled: list[str] = []
@@ -73,11 +77,16 @@ class TipsBar(Static):
         self._tip_idx = (self._tip_idx + 1) % len(self._shuffled)
         self._update_tip()
 
+    def set_config(self, config: AppConfig) -> None:
+        """Update the active config (for icon style changes)."""
+        self._config = config
+
     def _update_tip(self) -> None:
         if not self._shuffled:
             return
         t = self._theme
+        icon = get_icon("tip", self._config)
         line = Text()
-        line.append("💡 Tip: ", style=t.accent)
+        line.append(f"{icon} Tip: ", style=t.accent)
         line.append(self._shuffled[self._tip_idx], style=t.muted)
         self.update(line)

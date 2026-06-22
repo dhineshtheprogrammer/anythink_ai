@@ -79,10 +79,10 @@ class TestAIBubble:
         assert bubble._model_alias == "AI"
 
     def test_timestamp_set(self) -> None:
+        from datetime import datetime
+
         bubble = AIBubble(MIDNIGHT)
-        # Timestamp is set at construction time; should be non-empty
-        assert bubble._timestamp != ""
-        assert ":" in bubble._timestamp
+        assert isinstance(bubble._created_at, datetime)
 
 
 class TestSystemBubble:
