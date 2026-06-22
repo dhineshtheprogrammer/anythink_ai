@@ -12,6 +12,7 @@ from anythink.config.models import ModelRegistry
 from anythink.config.personas import PersonaManager
 from anythink.config.schema import AppConfig
 from anythink.config.templates import TemplateManager
+from anythink.debug.manager import DebugManager
 from anythink.embeddings.registry import EmbeddingRegistry
 from anythink.keys.manager import KeyManager
 from anythink.mcp.builtin.filesystem import FilesystemServer
@@ -61,6 +62,7 @@ class AppContext:
     spend_tracker: SpendTracker
     template_manager: TemplateManager
     schedule_manager: ScheduleManager
+    debug_manager: DebugManager
 
     @classmethod
     def create(
@@ -105,6 +107,12 @@ class AppContext:
         spend_tracker = SpendTracker(log_file=resolved.spend_log_file)
         spend_tracker.prune(keep_days=90)
 
+        debug_manager = DebugManager()
+        if config.debug_mode:
+            debug_manager.enable(level=config.debug_level)
+        if config.debug_api_logging:
+            debug_manager.toggle_api_logging()
+
         return cls(
             config=config,
             paths=resolved,
@@ -126,4 +134,5 @@ class AppContext:
             spend_tracker=spend_tracker,
             template_manager=TemplateManager(path=resolved.templates_file),
             schedule_manager=ScheduleManager(path=resolved.schedules_file),
+            debug_manager=debug_manager,
         )

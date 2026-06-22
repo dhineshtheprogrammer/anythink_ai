@@ -68,6 +68,7 @@ class StreamChunk:
     text: str
     finish_reason: str | None = None  # "stop", "length", "tool_calls", None (mid-stream)
     usage: TokenUsage | None = None  # present only in the final chunk (most providers)
+    thinking_text: str | None = None  # Anthropic extended thinking, when available
 
 
 @dataclass

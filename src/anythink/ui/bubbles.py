@@ -175,6 +175,7 @@ class AIBubble(Static):
         self._length_suffix = ""
         self._is_bookmarked = is_bookmarked
         self._retrieval_results: list[RetrievalResult] = []
+        self._debug_footer: str = ""
         # Initial streaming placeholder
         super().__init__(Text("▍", style=theme.muted))
 
@@ -207,6 +208,13 @@ class AIBubble(Static):
     def set_retrieval_results(self, results: list[RetrievalResult]) -> None:
         """Attach retrieval sources and refresh the bubble footer."""
         self._retrieval_results = results
+        if self._buffer:
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
+            self._redraw(body)
+
+    def set_debug_footer(self, text: str) -> None:
+        """Append a debug footer line (timing/TPS/stop reason) below the bubble."""
+        self._debug_footer = text
         if self._buffer:
             body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
             self._redraw(body)
@@ -267,15 +275,17 @@ class AIBubble(Static):
         t = self._theme
         cfg = self._config
 
+        extra_parts: list[RenderableType] = []
         if self._retrieval_results:
             n = len(self._retrieval_results)
             icon = get_icon("rag_footer", cfg)
             s = "s" if n != 1 else ""
-            footer_text = Text(
-                f"\n{icon} Retrieved from {n} source{s}",
-                style=t.muted,
-            )
-            content: RenderableType = Group(body, footer_text)
+            extra_parts.append(Text(f"\n{icon} Retrieved from {n} source{s}", style=t.muted))
+        if self._debug_footer:
+            extra_parts.append(Text(f"\n{self._debug_footer}", style=t.muted))
+
+        if extra_parts:
+            content: RenderableType = Group(body, *extra_parts)
         else:
             content = body
 

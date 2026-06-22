@@ -230,6 +230,28 @@ def register_commands(registry: CommandRegistry) -> None:
         )
     )
 
+    # ── V3.2 debug commands ────────────────────────────────────────────────
+    from anythink.debug.commands import register_debug_commands
+
+    register_debug_commands(registry)
+
+    registry.register(
+        SlashCommand(
+            "preview",
+            "Preview the fully assembled prompt before sending",
+            _preview,
+            "/preview",
+        )
+    )
+    registry.register(
+        SlashCommand(
+            "perf",
+            "Show session performance summary (alias for /debug perf)",
+            _perf_alias,
+            "/perf",
+        )
+    )
+
 
 async def _help(
     ctx: AppContext,
@@ -237,11 +259,25 @@ async def _help(
     state: ChatState,
     registry: CommandRegistry,
 ) -> CommandResult:
+    if args.strip().lower() == "debug":
+        from anythink.debug.commands import _DEBUG_HELP_TABLE
+
+        dm = ctx.debug_manager
+        lines = [
+            f"Debug mode: {'ON' if dm.is_active() else 'OFF'} (Level {dm.level()})\n",
+            "/debug subcommands:",
+        ]
+        for cmd, desc in _DEBUG_HELP_TABLE.items():
+            lines.append(f"  /debug {cmd:<38} {desc}")
+        return CommandResult(message="\n".join(lines))
+
     lines = ["Available commands:"]
     for name in registry.names():
-        cmd = registry.get(name)
-        if cmd is not None:
-            lines.append(f"  /{name:<12} {cmd.description}")
+        entry = registry.get(name)
+        if entry is not None:
+            lines.append(f"  /{name:<12} {entry.description}")
+    if ctx.debug_manager.is_active():
+        lines.append("\nDebug mode is ON — run /help debug for debug command reference.")
     return CommandResult(message="\n".join(lines))
 
 
@@ -1702,9 +1738,15 @@ async def _config_cmd(
             )
         )
 
+    if sub == "validate":
+        from anythink.config.validator import ConfigValidator, format_validation_table
+
+        issues = ConfigValidator().validate(ctx)
+        return CommandResult(message=format_validation_table(issues), action="debug_display")
+
     return CommandResult(
         error=True,
-        message="Usage: /config export [path]  |  /config import <path>",
+        message="Usage: /config export [path]  |  /config import <path>  |  /config validate",
     )
 
 
@@ -1899,3 +1941,66 @@ async def _schedule(
             "  |  remove|run|enable|disable <name>"
         ),
     )
+
+
+# ── V3.2: /preview ────────────────────────────────────────────────────────────
+
+
+async def _preview(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Show the fully assembled prompt that would be sent without sending it."""
+    import time
+
+    from anythink.app.chat import _trim_history  # noqa: PLC0415
+    from anythink.debug.formatters import format_prompt_payload  # noqa: PLC0415
+    from anythink.debug.models import RequestDebugRecord  # noqa: PLC0415
+    from anythink.session.models import _msg_to_dict  # noqa: PLC0415
+
+    trimmed = _trim_history(state.history, state.context_window)
+    try:
+        payload = [_msg_to_dict(m) for m in trimmed]
+    except Exception:
+        payload = []
+
+    now = time.monotonic()
+    synthetic = RequestDebugRecord(
+        request_id=0,
+        session_id=state.session_id,
+        timestamp=__import__("datetime").datetime.utcnow(),
+        model_id=state.model_id,
+        provider_name=state.provider.name,
+        alias_name=state.model_id,
+        prompt_payload=payload,
+        gen_params=state.gen_params,
+        t_start=now,
+        t_prompt_assembled=now,
+    )
+    return CommandResult(message=format_prompt_payload(synthetic), action="debug_display")
+
+
+# ── V3.2: /perf alias ─────────────────────────────────────────────────────────
+
+
+async def _perf_alias(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+    registry: CommandRegistry,
+) -> CommandResult:
+    """Alias for /debug perf — show session performance summary."""
+    dm = ctx.debug_manager
+    if not dm.is_active():
+        return CommandResult(
+            error=True,
+            message="Debug mode is not active. Run /debug on first.",
+        )
+    records = dm.all_records()
+    if not records:
+        return CommandResult(error=True, message="No debug records yet.")
+    from anythink.debug.formatters import format_perf_summary
+
+    return CommandResult(message=format_perf_summary(records), action="debug_display")

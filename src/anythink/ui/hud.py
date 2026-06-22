@@ -90,6 +90,8 @@ class HUDWidget(Static):
     search_enabled: reactive[bool] = reactive(False)
     rag_index: reactive[str] = reactive("")
     session_cost: reactive[float] = reactive(0.0)
+    debug_active: reactive[bool] = reactive(False)
+    debug_level: reactive[int] = reactive(2)
 
     def __init__(self, theme: Theme, version: str, **kwargs: object) -> None:
         super().__init__("", **kwargs)  # type: ignore[arg-type]
@@ -146,6 +148,12 @@ class HUDWidget(Static):
     def watch_session_cost(self) -> None:
         self._refresh_hud()
 
+    def watch_debug_active(self) -> None:
+        self._refresh_hud()
+
+    def watch_debug_level(self) -> None:
+        self._refresh_hud()
+
     # ── public API ─────────────────────────────────────────────────────────────
 
     def update_from_state(self, ctx: AppContext, state: ChatState) -> None:
@@ -196,6 +204,10 @@ class HUDWidget(Static):
 
         line.append(" ✦ Anythink  ", style=t.primary)
         line.append(f"v{self.app_version}", style=t.secondary)
+
+        if self.debug_active:
+            line.append(f"  [DEBUG L{self.debug_level}]", style="bold red")
+
         line.append_text(sep)
 
         session_label = f'"{self.session_name}"' if self.session_name else "(no name)"

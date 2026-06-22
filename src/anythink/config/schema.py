@@ -45,6 +45,11 @@ class AppConfig:
     spend_budget_soft_limit: float | None = None  # USD; None = no limit
     spend_budget_period: str = "monthly"  # "daily" | "monthly"
 
+    # --- V3.2 debug fields ---
+    debug_mode: bool = False
+    debug_level: int = 2  # 1 | 2 | 3
+    debug_api_logging: bool = False
+
     VALID_THEMES: frozenset[str] = field(
         default=frozenset({"midnight", "aurora", "ember", "arctic"}),
         init=False,

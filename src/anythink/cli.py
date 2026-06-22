@@ -55,6 +55,20 @@ def main(
             help="Launch directly in 4-panel Dashboard mode.",
         ),
     ] = False,
+    debug: Annotated[
+        bool,
+        typer.Option(
+            "--debug",
+            help="Start with debug mode active (Level 2).",
+        ),
+    ] = False,
+    debug_level: Annotated[
+        int,
+        typer.Option(
+            "--debug-level",
+            help="Debug verbosity level when --debug is set (1, 2, or 3).",
+        ),
+    ] = 2,
 ) -> None:
     """Start an interactive chat session."""
     if ctx.invoked_subcommand is not None:
@@ -66,6 +80,8 @@ def main(
         raise typer.Exit(1)
 
     app_ctx = AppContext.create(paths=config_manager.paths)
+    if debug:
+        app_ctx.debug_manager.enable(level=max(1, min(3, debug_level)))
     anythink_app = AnythinkApp(app_ctx, dashboard=dashboard)
     anythink_app.run()
     raise typer.Exit(anythink_app.return_code or 0)

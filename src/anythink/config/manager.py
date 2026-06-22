@@ -78,6 +78,14 @@ class Paths:
     def spend_log_file(self) -> Path:
         return self.data_dir / "spend.yaml"
 
+    @property
+    def api_debug_log_file(self) -> Path:
+        return self.state_dir / "logs" / "api_debug.log"
+
+    @property
+    def debug_exports_dir(self) -> Path:
+        return self.data_dir / "debug_exports"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.config_dir,

@@ -33,6 +33,7 @@ from anythink.ui.startup import find_resumable_session, is_returning_user
 from anythink.ui.textual.conversation import ConversationView
 from anythink.ui.textual.hint_bar import HintBar
 from anythink.ui.textual.input_area import InputArea
+from anythink.ui.textual.panels.debug_panel import DebugPanel
 from anythink.ui.textual.panels.file_browser import FileBrowserTab
 from anythink.ui.textual.panels.rag_browser import RAGBrowserTab
 from anythink.ui.textual.panels.session_list import SessionListPanel
@@ -71,6 +72,7 @@ class AnythinkApp(App[int]):
         Binding("ctrl+d", "toggle_dashboard", "Toggle Dashboard", show=True, priority=True),
         Binding("ctrl+l", "toggle_left_panel", "Sessions", show=False, priority=True),
         Binding("ctrl+r", "toggle_right_panel", "Stats", show=False, priority=True),
+        Binding("ctrl+b", "toggle_debug_panel", "Debug Panel", show=False, priority=True),
         Binding("escape", "escape_or_stop", "Stop / Focus", show=False, priority=True),
         Binding("ctrl+y", "copy_response", "Copy response", show=False),
         Binding("ctrl+k", "copy_last_code", "Copy code", show=False),
@@ -99,6 +101,10 @@ class AnythinkApp(App[int]):
     }
     StatsPanel {
         width: 28;
+        display: none;
+    }
+    DebugPanel {
+        width: 32;
         display: none;
     }
     #bottom-tabs {
@@ -175,6 +181,7 @@ class AnythinkApp(App[int]):
             yield SessionListPanel(self._ctx, id="left-panel")
             yield ConversationView()
             yield StatsPanel(self._ctx, id="right-panel")
+            yield DebugPanel(id="debug-panel")
         with TabbedContent(id="bottom-tabs"):
             with TabPane("Files", id="tab-files"):
                 yield FileBrowserTab(id="file-browser")
@@ -446,6 +453,89 @@ class AnythinkApp(App[int]):
         if rp.display:
             self.query_one(StatsPanel).update_stats(self._ctx, self._state)
 
+    def action_toggle_debug_panel(self) -> None:
+        """Ctrl+B: show/hide the Debug Panel."""
+        self._toggle_debug_panel()
+
+    def _toggle_debug_panel(self) -> None:
+        """Show or hide the debug side panel and sync DebugManager state."""
+        import contextlib
+
+        dm = self._ctx.debug_manager
+        new_state = dm.toggle_panel()
+        with contextlib.suppress(Exception):
+            dp = self.query_one("#debug-panel")
+            dp.display = new_state
+            if new_state:
+                self.query_one(DebugPanel).set_level(dm.level())
+
+    async def _stream_replay(self, rec: object, provider_alias: str | None) -> None:
+        """Background worker: replay a past request and show the response."""
+        import contextlib
+
+        if self._state is None:
+            return
+
+        from anythink.debug.models import RequestDebugRecord
+        from anythink.providers.base import ChatMessage
+
+        assert isinstance(rec, RequestDebugRecord)
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+        state = self._state
+
+        provider = state.provider
+        if provider_alias:
+            with contextlib.suppress(Exception):
+                alias_obj = self._ctx.model_registry.get(provider_alias)
+                if alias_obj is not None:
+                    api_key = self._ctx.key_manager.get_key(alias_obj.provider)
+                    candidate = self._ctx.provider_registry.instantiate(
+                        alias_obj.provider,
+                        api_key=api_key,
+                        base_url=self._ctx.config.local_servers.get(alias_obj.provider),
+                    )
+                    if candidate is not None:
+                        provider = candidate
+
+        messages = []
+        for item in rec.prompt_payload:
+            role = item.get("role", "user")
+            content = item.get("content", "")
+            if isinstance(content, str):
+                messages.append(ChatMessage(role=role, content=content))
+
+        bubble = AIBubble(
+            t,
+            model_alias=f"↺ Replay #{rec.request_id}",
+            provider=provider.display_name,
+            config=self._ctx.config,
+        )
+        conv.add_bubble(bubble)
+
+        buffer = ""
+        with contextlib.suppress(Exception):
+            self.query_one(HintBar).set_streaming(True)
+        try:
+            chunk_stream = provider.stream_chat(
+                messages=messages,
+                model=rec.model_id,
+                gen_params=rec.gen_params,
+            )
+            async for chunk in chunk_stream:
+                if self._stop_streaming:
+                    break
+                if chunk.text:
+                    buffer += chunk.text
+                    bubble.append_text(chunk.text)
+        except Exception as exc:
+            bubble.show_error(str(exc))
+        finally:
+            bubble.finalize(buffer)
+            with contextlib.suppress(Exception):
+                self.query_one(HintBar).set_streaming(False)
+
     def action_escape_or_stop(self) -> None:
         """Escape: close settings if open; stop streaming if active; else focus input."""
         import contextlib
@@ -693,6 +783,36 @@ class AnythinkApp(App[int]):
 
         with contextlib.suppress(Exception):
             self.query_one(ToolOutputTab).add_event(tool_name, kind, summary)
+
+    def _log_tool_debug(
+        self,
+        name: str,
+        args: dict[str, object],
+        result_summary: str,
+        duration_s: float,
+        success: bool,
+    ) -> None:
+        """Record a tool call into the current debug record (best-effort)."""
+        dm = self._ctx.debug_manager
+        if not dm.is_active():
+            return
+        rec = dm.latest()
+        if rec is None:
+            return
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            from anythink.debug.models import ToolCallEntry
+
+            rec.tool_calls.append(
+                ToolCallEntry(
+                    name=name,
+                    arguments=dict(args),
+                    result_summary=result_summary,
+                    duration_s=duration_s,
+                    success=success,
+                )
+            )
 
     # Maximum number of turn-pairs tracked for undo / bookmarks.
     # Beyond this, the oldest entries are pruned to bound memory usage in
@@ -1225,6 +1345,44 @@ class AnythinkApp(App[int]):
                 conv.add_bubble(SystemBubble(result.message, t, kind="info"))
             return
 
+        if result.action == "debug_hud_update":
+            dm = self._ctx.debug_manager
+            hud = self.query_one(HUDWidget)
+            hud.debug_active = dm.is_active()
+            hud.debug_level = dm.level()
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "debug_panel_toggle":
+            self._toggle_debug_panel()
+            dm = self._ctx.debug_manager
+            label = "open" if dm.panel_open() else "closed"
+            conv.add_bubble(SystemBubble(f"Debug panel {label}", t, kind="info"))
+            return
+
+        if result.action == "debug_display":
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "replay_stream" and self._state is not None:
+            record_id = result.extra.get("record_id")
+            provider_alias = result.extra.get("provider_alias")
+            dm = self._ctx.debug_manager
+            rec = dm.get(record_id) if record_id else dm.latest()
+            if rec is not None:
+                if result.message:
+                    conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+                self.run_worker(
+                    self._stream_replay(rec, provider_alias),
+                    exclusive=False,
+                    exit_on_error=False,
+                )
+            else:
+                conv.add_bubble(SystemBubble("No record found to replay.", t, kind="error"))
+            return
+
         if result.should_exit:
             self.exit(0)
             return
@@ -1288,6 +1446,8 @@ class AnythinkApp(App[int]):
         query: str,
         *,
         thinking: ThinkingWidget | None = None,
+        is_replay: bool = False,
+        replay_request_id: int = 0,
     ) -> None:
         """Stream the AI response token-by-token into *bubble*."""
         import time
@@ -1296,6 +1456,7 @@ class AnythinkApp(App[int]):
         t0 = time.monotonic()
         _got_usage = False
         _was_stopped = False
+        dm = self._ctx.debug_manager
 
         self._active_ai_bubble = bubble
         self._stop_streaming = False
@@ -1303,6 +1464,39 @@ class AnythinkApp(App[int]):
 
         with contextlib.suppress(Exception):
             self.query_one(HintBar).set_streaming(True)
+
+        # ── Debug: begin record ────────────────────────────────────────────
+        _debug_record = None
+        if dm.is_active():
+            from anythink.session.models import _msg_to_dict
+
+            trimmed_for_payload = _trim_history(state.history, state.context_window)
+            try:
+                payload = [_msg_to_dict(m) for m in trimmed_for_payload]
+            except Exception:
+                payload = []
+            _debug_record = dm.begin_request(
+                session_id=state.session_id,
+                model_id=state.model_id,
+                provider_name=state.provider.name,
+                alias_name=state.model_id,
+                prompt_payload=payload,
+                gen_params=state.gen_params,
+                t_start=t0,
+            )
+            _debug_record.rag_query = query
+
+        # ── Debug panel: begin ─────────────────────────────────────────────
+        _debug_panel = None
+        if dm.is_active() and dm.panel_open():
+            import contextlib as _cl
+
+            with _cl.suppress(Exception):
+                _debug_panel = self.query_one(DebugPanel)
+                await _debug_panel.begin_request(
+                    _debug_record.request_id if _debug_record else 0,
+                    time.strftime("%H:%M:%S"),
+                )
 
         try:
             # ── RAG retrieval ──────────────────────────────────────────────
@@ -1313,10 +1507,38 @@ class AnythinkApp(App[int]):
                 emb = self._ctx.embedding_registry.get_available(self._ctx.config.embedding_backend)
                 if emb is not None:
                     try:
-                        rag_results = await rag_mgr.retrieve(query, emb, top_k=5)
-                        if rag_results:
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_rag_start = time.monotonic()
+                            _rag_top_k = 10  # extra results for the chunk inspector
+                        else:
+                            _rag_top_k = 5
+
+                        def _rag_debug_cb(emb_ms: float, candidates: int) -> None:
+                            if _debug_record is not None:
+                                _debug_record.rag_embedding_ms = emb_ms
+                                _debug_record.rag_candidates_evaluated = candidates
+
+                        rag_results = await rag_mgr.retrieve(
+                            query,
+                            emb,
+                            top_k=_rag_top_k,
+                            debug_callback=_rag_debug_cb if dm.is_active() else None,
+                        )
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_rag_end = time.monotonic()
+                            _debug_record.rag_results = list(rag_results)
+                            if _debug_panel is not None:
+                                n = sum(1 for r in rag_results if r.relevance >= 0.70)
+                                await _debug_panel.append_event(
+                                    f"RAG retrieved {n} chunks",
+                                    f"{_debug_record.rag_duration_ms():.0f}ms",
+                                )
+
+                        # Only inject the top 5 into context
+                        inject_results = rag_results[:5]
+                        if inject_results:
                             context_parts = "\n\n".join(
-                                f"[Source: {r.source_path}]\n{r.chunk_text}" for r in rag_results
+                                f"[Source: {r.source_path}]\n{r.chunk_text}" for r in inject_results
                             )
                             state.history[-1] = ChatMessage(
                                 role="user",
@@ -1325,11 +1547,10 @@ class AnythinkApp(App[int]):
                                     TextPart(query),
                                 ],
                             )
-                            # Attach results to bubble for display after streaming
-                            # (stored; applied in finalize path below)
-                            bubble._retrieval_results = rag_results
+                            bubble._retrieval_results = inject_results
                     except Exception:  # nosec B110 - RAG errors are non-fatal
-                        pass
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_rag_end = time.monotonic()
 
             # ── Web search ─────────────────────────────────────────────────
             if state.search_enabled:
@@ -1338,7 +1559,16 @@ class AnythinkApp(App[int]):
                 backend = self._ctx.search_registry.get_available(self._ctx.config.search_provider)
                 if backend is not None:
                     try:
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_search_start = time.monotonic()
                         results = await backend.search(query)
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_search_end = time.monotonic()
+                            if _debug_panel is not None:
+                                await _debug_panel.append_event(
+                                    "Web search complete",
+                                    f"{_debug_record.search_duration_ms():.0f}ms",
+                                )
                         if results:
                             state.history[-1] = ChatMessage(
                                 role="user",
@@ -1348,7 +1578,12 @@ class AnythinkApp(App[int]):
                                 ],
                             )
                     except SearchError:
-                        pass
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_search_end = time.monotonic()
+
+            # ── Debug: prompt assembled ────────────────────────────────────
+            if dm.is_active() and _debug_record is not None:
+                _debug_record.t_prompt_assembled = time.monotonic()
 
             # Replace ThinkingWidget with the real AIBubble before first token
             if thinking is not None:
@@ -1360,25 +1595,76 @@ class AnythinkApp(App[int]):
             if thinking is not None:
                 thinking = None  # prevent double-remove in error path
 
+            if dm.is_active() and _debug_record is not None:
+                _debug_record.t_api_sent = time.monotonic()
+                if _debug_panel is not None:
+                    await _debug_panel.append_event("API call sent", "")
+
             chunk_stream = state.provider.stream_chat(
                 messages=_trim_history(state.history, state.context_window),
                 model=state.model_id,
                 gen_params=state.gen_params,
             )
             _last_usage = None
+            _first_token_seen = False
+            _last_token_time = time.monotonic()
+            _token_index = 0
             async for chunk in chunk_stream:
                 if self._stop_streaming:
                     _was_stopped = True
+                    if _debug_record is not None:
+                        _debug_record.was_stopped_by_user = True
                     break
+                _now = time.monotonic()
                 if chunk.text:
+                    if not _first_token_seen:
+                        _first_token_seen = True
+                        if dm.is_active() and _debug_record is not None:
+                            _debug_record.t_first_token = _now
+                            if _debug_panel is not None:
+                                ttft = _debug_record.ttft_ms()
+                                await _debug_panel.append_event(
+                                    "First token received",
+                                    f"TTFT {ttft:.0f}ms" if ttft is not None else "",
+                                )
+                    if dm.is_active() and _debug_record is not None and dm.level() >= 3:
+                        delta_ms = (_now - _last_token_time) * 1000
+                        from anythink.debug.models import TokenEntry
+
+                        _debug_record.token_trace.append(
+                            TokenEntry(_token_index, chunk.text, delta_ms)
+                        )
+                        _token_index += 1
+                    _last_token_time = _now
                     buffer += chunk.text
                     bubble.append_text(chunk.text)
+                if chunk.finish_reason and dm.is_active() and _debug_record is not None:
+                    _debug_record.stop_reason = chunk.finish_reason
+                if chunk.thinking_text and dm.is_active() and _debug_record is not None:
+                    _debug_record.agent_thinking += chunk.thinking_text
                 if chunk.usage:
                     # Accumulate across turns — do not overwrite
                     state.total_tokens_used += chunk.usage.total_tokens
                     state.tokens_estimated = False
                     _got_usage = True
                     _last_usage = chunk.usage
+                    if dm.is_active() and _debug_record is not None:
+                        _debug_record.usage = chunk.usage
+                        _debug_record.completion_tokens = chunk.usage.completion_tokens
+
+            # ── Debug: stream complete ─────────────────────────────────────
+            if dm.is_active() and _debug_record is not None:
+                _debug_record.t_stream_end = time.monotonic()
+                if _debug_record.completion_tokens == 0 and buffer:
+                    _debug_record.completion_tokens = len(buffer) // 4
+                stream_s = _debug_record.stream_duration_ms() / 1000
+                if stream_s > 0 and _debug_record.completion_tokens > 0:
+                    _debug_record.tokens_per_second = _debug_record.completion_tokens / stream_s
+                if _debug_panel is not None:
+                    await _debug_panel.append_event(
+                        "Stream complete",
+                        f"{_debug_record.stream_duration_ms():.0f}ms",
+                    )
 
             # Record spend after stream completes
             if _last_usage is not None and self._ctx.config.spend_tracking:
@@ -1476,6 +1762,31 @@ class AnythinkApp(App[int]):
         if BookmarkManager(state.bookmarks).is_bookmarked(turn_index):
             bubble.mark_bookmarked()
 
+        # ── Debug: finalize record + set bubble footer ─────────────────────
+        if dm.is_active() and _debug_record is not None:
+            import time as _time
+
+            _debug_record.t_render_end = _time.monotonic()
+            dm.finalize_request(_debug_record)
+
+            if _debug_panel is not None:
+                await _debug_panel.finalize_request(_debug_record, dm.level())
+
+            # Compose compact footer line on the AI bubble
+            _footer_parts: list[str] = []
+            if _debug_record.tokens_per_second:
+                _footer_parts.append(f"{_debug_record.tokens_per_second:.0f} tok/s")
+            if _debug_record.stop_reason:
+                _footer_parts.append(f"stop: {_debug_record.stop_reason}")
+            ttft_v = _debug_record.ttft_ms()
+            if ttft_v is not None:
+                _footer_parts.append(f"TTFT {ttft_v:.0f}ms")
+            tw = _debug_record.total_wall_ms()
+            if tw:
+                _footer_parts.append(f"Total {tw:.0f}ms")
+            if _footer_parts:
+                bubble.set_debug_footer("  ⏱ " + " · ".join(_footer_parts))
+
     async def _rebuild_rag_index(self, index_name: str) -> None:
         """Background worker: rebuild a named RAG index."""
         t = self._ctx.theme
@@ -1535,6 +1846,13 @@ class AnythinkApp(App[int]):
         kind = "code" if result.succeeded else "error"
         conv.add_bubble(SystemBubble("\n".join(body_parts), t, kind=kind))
         self._log_tool_event(language, "exec", stdout_text[:120])
+        self._log_tool_debug(
+            name=f"exec:{language}",
+            args={"language": language, "code": code[:120]},
+            result_summary=stdout_text[:120],
+            duration_s=result.duration_s,
+            success=result.succeeded,
+        )
         if result.duration_s >= SLOW_EXEC_S:
             self._ctx.notifier.notify(
                 "exec_done",
@@ -1598,6 +1916,13 @@ class AnythinkApp(App[int]):
         header = f"🔍  {mode_label}: {target} ({result.duration_s:.2f}s)"
         conv.add_bubble(SystemBubble(f"{header}\n{preview}", t, kind="search"))
         self._log_tool_event(target, "browse", result.stdout[:120])
+        self._log_tool_debug(
+            name="browse",
+            args={"url": url, "query": query},
+            result_summary=result.stdout[:120],
+            duration_s=result.duration_s,
+            success=result.succeeded,
+        )
         self._ctx.notifier.notify(
             "browse_done",
             "Anythink — Browse Complete",
@@ -1647,6 +1972,13 @@ class AnythinkApp(App[int]):
         kind = "error" if result.is_error else "code"
         conv.add_bubble(SystemBubble(f"{header}\n{preview}", t, kind=kind))
         self._log_tool_event(tool_name, result.server_name or "mcp", result.content[:120])
+        self._log_tool_debug(
+            name=f"mcp:{tool_name}",
+            args=dict(arguments),
+            result_summary=result.content[:120],
+            duration_s=result.duration_s,
+            success=not result.is_error,
+        )
 
         if result.is_error:
             return

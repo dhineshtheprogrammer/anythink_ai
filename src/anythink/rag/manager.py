@@ -211,12 +211,25 @@ class RAGManager:
         backend: BaseEmbeddingBackend,
         *,
         top_k: int = 5,
+        debug_callback: object = None,
     ) -> list[RetrievalResult]:
         """Retrieve the most relevant chunks for *query* from the active store."""
+        import time as _time
+
         if self._active_store is None or self._active_store.count() == 0:
             return []
 
+        t_emb_start = _time.monotonic()
         vecs = await backend.embed([query])
+        emb_ms = (_time.monotonic() - t_emb_start) * 1000
+        candidates = self._active_store.count()
+
+        if debug_callback is not None and callable(debug_callback):
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                debug_callback(emb_ms, candidates)
+
         return self._active_store.query(vecs[0], top_k=top_k)
 
     # ── helpers ────────────────────────────────────────────────────────────
