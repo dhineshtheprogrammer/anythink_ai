@@ -5,7 +5,7 @@ from __future__ import annotations
 import subprocess  # nosec B404 - used only to shell out to pip with fixed, list-form args
 import sys
 from importlib.metadata import entry_points
-from typing import Any
+from typing import Any  # noqa: F401 — used in V4 hook type hints
 
 from anythink.plugins.models import PluginInfo
 
@@ -13,6 +13,9 @@ _PLUGIN_GROUPS = [
     "anythink.providers",
     "anythink.search_backends",
     "anythink.slash_commands",
+    # V4 MMOS hook groups
+    "anythink.pre_routing_hooks",
+    "anythink.post_phase_hooks",
 ]
 
 
@@ -71,3 +74,48 @@ class PluginManager:
         )
         output = result.stdout + result.stderr
         return result.returncode == 0, output
+
+    # ── V4 MMOS hook points ───────────────────────────────────────────────
+
+    def invoke_pre_routing_hooks(
+        self,
+        query: str,
+        intent: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Call all registered pre_routing_hook entry points.
+
+        Each hook receives (query, intent_dict) and may return a dict of
+        routing hints that are merged into the final context. Failures in
+        individual hooks are silently swallowed so they never block queries.
+        """
+        hints: dict[str, Any] = {}
+        for ep in entry_points(group="anythink.pre_routing_hooks"):
+            try:
+                hook_fn = ep.load()
+                result = hook_fn(query, intent)
+                if isinstance(result, dict):
+                    hints.update(result)
+            except Exception:  # nosec B110 - plugin failures must not break queries
+                pass
+        return hints
+
+    def invoke_post_phase_hooks(
+        self,
+        phase: dict[str, Any],
+        output: str,
+    ) -> str:
+        """Call all registered post_phase_hook entry points.
+
+        Each hook receives (phase_dict, output_text) and may return a
+        transformed output string. Failures fall back to the original output.
+        """
+        result = output
+        for ep in entry_points(group="anythink.post_phase_hooks"):
+            try:
+                hook_fn = ep.load()
+                transformed = hook_fn(phase, result)
+                if isinstance(transformed, str):
+                    result = transformed
+            except Exception:  # nosec B110 - plugin failures must not break queries
+                pass
+        return result

@@ -328,3 +328,166 @@ async def test_debug_replay_with_provider():
     result = await _debug_handler(ctx, "replay 1 --provider groq", _make_state(), MagicMock())
     assert result.action == "replay_stream"
     assert result.extra["provider_alias"] == "groq"
+
+
+# ── V4 MMOS debug subcommands ─────────────────────────────────────────────────
+
+
+def _make_record_with_routing(request_id: int = 1) -> RequestDebugRecord:
+    """Create a debug record pre-populated with MMOS routing data."""
+    from anythink.optimize.models import RoutingDecision
+
+    rec = _make_record(request_id)
+    rec.routing_decision = RoutingDecision(
+        strategy="ensemble",
+        primary_model="groq/llama3-70b",
+        phase_models=["groq/llama3-70b", "ollama/mistral"],
+        plan_mode=False,
+        confidence=0.9,
+        reason="Multi-model quality query",
+    )
+    rec.rate_limit_events = [{"model": "groq/llama3-70b", "event": "rpm_limit_hit"}]
+    return rec
+
+
+@pytest.mark.asyncio
+async def test_debug_routing_no_records():
+    dm = DebugManager()
+    dm.enable()
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "routing", _make_state(), MagicMock())
+    assert result.error is True
+    assert "No debug records" in result.message
+
+
+@pytest.mark.asyncio
+async def test_debug_routing_no_mmos_data():
+    dm = DebugManager()
+    dm.enable()
+    rec = _make_record(1)
+    # No routing_decision on record
+    dm.finalize_request(rec)
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "routing", _make_state(), MagicMock())
+    assert result.error is False
+    assert "No MMOS routing decision" in result.message
+
+
+@pytest.mark.asyncio
+async def test_debug_routing_shows_strategy_and_model():
+    dm = DebugManager()
+    dm.enable()
+    rec = _make_record_with_routing(1)
+    dm.finalize_request(rec)
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "routing", _make_state(), MagicMock())
+    assert result.error is False
+    assert result.action == "debug_display"
+    assert "ensemble" in result.message
+    assert "groq/llama3-70b" in result.message
+    assert "0.90" in result.message
+
+
+@pytest.mark.asyncio
+async def test_debug_plan_no_records():
+    dm = DebugManager()
+    dm.enable()
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "plan", _make_state(), MagicMock())
+    assert result.error is True
+
+
+@pytest.mark.asyncio
+async def test_debug_plan_no_plan_trace():
+    dm = DebugManager()
+    dm.enable()
+    dm.finalize_request(_make_record(1))
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "plan", _make_state(), MagicMock())
+    assert result.error is False
+    assert "No Plan Mode trace" in result.message
+
+
+@pytest.mark.asyncio
+async def test_debug_plan_shows_plan_info():
+    from datetime import datetime
+
+    from anythink.optimize.plan import ExecutionPlan, PlanPhase, PLAN_STATUS_DONE
+
+    dm = DebugManager()
+    dm.enable()
+    rec = _make_record(1)
+    plan = ExecutionPlan(
+        plan_id="test-plan-id",
+        session_id="sess",
+        original_query="Build a React app with Node.js backend",
+        phases=[
+            PlanPhase(
+                phase_num=1,
+                title="Project structure",
+                description="Set up folders",
+                model_id="groq/llama3-70b",
+                estimated_tokens=800,
+                status=PLAN_STATUS_DONE,
+                output="Here is the structure...",
+                elapsed_s=3.2,
+                actual_model="groq/llama3-70b",
+            )
+        ],
+        created_at=datetime.utcnow(),
+        recombination_model="ollama/mistral",
+        status=PLAN_STATUS_DONE,
+        final_output="Final synthesised answer.",
+    )
+    rec.plan_trace = plan
+    dm.finalize_request(rec)
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "plan", _make_state(), MagicMock())
+    assert result.error is False
+    assert result.action == "debug_display"
+    assert "test-plan-id" in result.message
+    assert "Build a React app" in result.message
+    assert "done" in result.message.lower()
+
+
+@pytest.mark.asyncio
+async def test_debug_ratelimit_no_records():
+    dm = DebugManager()
+    dm.enable()
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "ratelimit", _make_state(), MagicMock())
+    assert result.error is True
+
+
+@pytest.mark.asyncio
+async def test_debug_ratelimit_no_events():
+    dm = DebugManager()
+    dm.enable()
+    dm.finalize_request(_make_record(1))
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "ratelimit", _make_state(), MagicMock())
+    assert result.error is False
+    assert "No rate limit events" in result.message
+
+
+@pytest.mark.asyncio
+async def test_debug_ratelimit_shows_events():
+    dm = DebugManager()
+    dm.enable()
+    rec = _make_record_with_routing(1)
+    dm.finalize_request(rec)
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "ratelimit", _make_state(), MagicMock())
+    assert result.error is False
+    assert result.action == "debug_display"
+    assert "rpm_limit_hit" in result.message
+
+
+@pytest.mark.asyncio
+async def test_debug_help_includes_v4_commands():
+    dm = DebugManager()
+    ctx = _make_ctx(dm)
+    result = await _debug_handler(ctx, "help", _make_state(), MagicMock())
+    assert "routing" in result.message
+    assert "plan" in result.message
+    assert "ratelimit" in result.message

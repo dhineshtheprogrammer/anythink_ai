@@ -39,6 +39,10 @@ _DEBUG_HELP_TABLE: dict[str, str] = {
     "export": "Export debug log to JSON file",
     "export --format txt": "Export debug log to plain text",
     "perf": "Session performance summary",
+    # V4 MMOS
+    "routing": "Show MMOS routing decision for the last query",
+    "plan": "Show full Plan Mode execution trace for the last run",
+    "ratelimit": "Show rate limit event log",
 }
 
 
@@ -186,6 +190,16 @@ async def _debug_handler(
 
     if sub == "export":
         return _handle_export(dm, ctx, rest_str)
+
+    # ── V4 MMOS inspection ────────────────────────────────────────────────
+    if sub == "routing":
+        return _handle_routing(dm)
+
+    if sub == "plan":
+        return _handle_plan(dm)
+
+    if sub == "ratelimit":
+        return _handle_ratelimit(dm)
 
     # ── fallback / help ───────────────────────────────────────────────────
     if sub in ("help", ""):
@@ -512,6 +526,106 @@ def _handle_export(dm: object, ctx: object, rest_str: str) -> CommandResult:
         dm.export_json(path)
 
     return CommandResult(message=f"Debug log exported to {path}")
+
+
+# ── V4 MMOS debug handlers ───────────────────────────────────────────────────
+
+
+def _handle_routing(dm: object) -> CommandResult:
+    """Show the routing decision stored on the latest debug record."""
+    from anythink.debug.manager import DebugManager
+
+    assert isinstance(dm, DebugManager)
+    rec = dm.latest()
+    if rec is None:
+        return CommandResult(error=True, message="No debug records yet.")
+
+    rd = rec.routing_decision
+    if rd is None:
+        return CommandResult(
+            message="No MMOS routing decision found on the latest record.\n"
+            "Enable MMOS (/optimize toggle) and send a query to capture routing data.",
+            action="debug_display",
+        )
+
+    lines = [
+        "── MMOS Routing Decision ──────────────────────────────────────",
+        f"  Strategy:           {rd.strategy}",
+        f"  Primary model:      {rd.primary_model}",
+        f"  Plan Mode:          {'yes' if rd.plan_mode else 'no'}",
+        f"  Confidence:         {rd.confidence:.2f}",
+        f"  Reason:             {rd.reason}",
+    ]
+    if rd.phase_models:
+        lines.append(f"  Phase models:       {', '.join(rd.phase_models)}")
+    if rd.recombination_model:
+        lines.append(f"  Recombination:      {rd.recombination_model}")
+    lines.append("────────────────────────────────────────────────────────────────")
+    return CommandResult(message="\n".join(lines), action="debug_display")
+
+
+def _handle_plan(dm: object) -> CommandResult:
+    """Show the Plan Mode execution trace stored on the latest debug record."""
+    from anythink.debug.manager import DebugManager
+
+    assert isinstance(dm, DebugManager)
+    rec = dm.latest()
+    if rec is None:
+        return CommandResult(error=True, message="No debug records yet.")
+
+    plan = rec.plan_trace
+    if plan is None:
+        return CommandResult(
+            message="No Plan Mode trace found on the latest record.\n"
+            "Trigger a Plan Mode query to capture plan execution data.",
+            action="debug_display",
+        )
+
+    lines = [
+        "── Plan Mode Execution Trace ──────────────────────────────────",
+        f"  Plan ID:    {plan.plan_id}",
+        f"  Status:     {plan.status}",
+        f"  Query:      {plan.original_query[:60]}{'…' if len(plan.original_query) > 60 else ''}",
+        f"  Phases:     {len(plan.phases)}",
+        f"  Est. tokens: {plan.total_estimated_tokens:,}",
+        "",
+    ]
+    for phase in plan.phases:
+        model = phase.actual_model or phase.model_id
+        lines.append(
+            f"  [{phase.status:>8}]  Phase {phase.phase_num}: {phase.title}"
+            f"  ({model}, {phase.elapsed_s:.1f}s)"
+        )
+    lines += [
+        "",
+        f"  Final output: {len(plan.final_output):,} chars",
+        "────────────────────────────────────────────────────────────────",
+    ]
+    return CommandResult(message="\n".join(lines), action="debug_display")
+
+
+def _handle_ratelimit(dm: object) -> CommandResult:
+    """Show the rate limit event log stored on the latest debug record."""
+    from anythink.debug.manager import DebugManager
+
+    assert isinstance(dm, DebugManager)
+    rec = dm.latest()
+    if rec is None:
+        return CommandResult(error=True, message="No debug records yet.")
+
+    events = rec.rate_limit_events
+    if not events:
+        return CommandResult(
+            message="No rate limit events recorded on the latest request.\n"
+            "Rate limit events are captured when a model is at its limit during an MMOS query.",
+            action="debug_display",
+        )
+
+    lines = ["── Rate Limit Events ──────────────────────────────────────────"]
+    for ev in events:
+        lines.append(f"  {ev}")
+    lines.append("────────────────────────────────────────────────────────────────")
+    return CommandResult(message="\n".join(lines), action="debug_display")
 
 
 # ── registration ──────────────────────────────────────────────────────────────

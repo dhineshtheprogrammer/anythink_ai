@@ -92,6 +92,10 @@ class HUDWidget(Static):
     session_cost: reactive[float] = reactive(0.0)
     debug_active: reactive[bool] = reactive(False)
     debug_level: reactive[int] = reactive(2)
+    # --- V4 MMOS ---
+    mmos_enabled: reactive[bool] = reactive(False)
+    mmos_mode: reactive[str] = reactive("")
+    mmos_strategy: reactive[str] = reactive("")
 
     def __init__(self, theme: Theme, version: str, **kwargs: object) -> None:
         super().__init__("", **kwargs)  # type: ignore[arg-type]
@@ -181,9 +185,23 @@ class HUDWidget(Static):
     def watch_debug_level(self) -> None:
         self._refresh_hud()
 
+    def watch_mmos_enabled(self) -> None:
+        self._refresh_hud()
+
+    def watch_mmos_mode(self) -> None:
+        self._refresh_hud()
+
+    def watch_mmos_strategy(self) -> None:
+        self._refresh_hud()
+
     # ── public API ─────────────────────────────────────────────────────────────
 
-    def update_from_state(self, ctx: AppContext, state: ChatState) -> None:
+    def update_from_state(
+        self,
+        ctx: AppContext,
+        state: ChatState,
+        mmos_settings: object = None,
+    ) -> None:
         """Sync all reactive fields from *ctx* and *state* in one call."""
         self.session_name = state.session_name or ""
         self.model_alias = state.model_id
@@ -198,6 +216,18 @@ class HUDWidget(Static):
         self._warn_orange = ctx.config.context_warning_orange
         self._warn_red = ctx.config.context_warning_red
         self._icon_style = ctx.config.icon_style
+
+        # V4 MMOS — sync from live settings manager if available
+        if mmos_settings is not None:
+            s = mmos_settings  # OptimizeSettings instance
+            self.mmos_enabled = getattr(s, "enabled", False)
+            self.mmos_mode = getattr(s, "mode", "")
+            self.mmos_strategy = getattr(s, "mixing_mode", "")
+        else:
+            s_live = ctx.mmos_settings.get()
+            self.mmos_enabled = s_live.enabled
+            self.mmos_mode = s_live.mode
+            self.mmos_strategy = s_live.mixing_mode
 
     # ── rendering ─────────────────────────────────────────────────────────────
 
@@ -315,5 +345,12 @@ class HUDWidget(Static):
             line.append_text(sep)
             line.append("~$", style=hm)
             line.append(f"{self.session_cost:.4f}", style=hm)
+
+        # V4 MMOS indicator — only shown when optimization engine is enabled
+        if self.mmos_enabled:
+            line.append_text(sep)
+            mode_label = self.mmos_mode.upper() if self.mmos_mode else "AUTO"
+            strategy_label = self.mmos_strategy if self.mmos_strategy else "routing"
+            line.append(f"[{mode_label} · {strategy_label}]", style=ha)
 
         return line

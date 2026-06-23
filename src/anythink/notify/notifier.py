@@ -23,6 +23,10 @@ NOTIFICATION_DEFAULTS: dict[str, bool] = {
     "exec_done": True,
     "browse_done": True,
     "provider_failure": True,
+    # V4 MMOS notification types
+    "plan_mode_complete": True,   # fires when all Plan Mode phases + recombination finish
+    "rate_limit_switch": False,   # off by default — too noisy during normal use
+    "model_unavailable": True,    # fires when a model becomes unreachable in auto mode
 }
 
 SLOW_RESPONSE_S: float = 15.0  # seconds before a "slow response" notification fires

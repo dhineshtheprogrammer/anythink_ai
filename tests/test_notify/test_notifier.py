@@ -21,8 +21,10 @@ def _notifier(enabled: bool = True, **toggles: bool) -> Notifier:
 class TestNotifierDefaults:
     def test_all_types_enabled_by_default(self) -> None:
         n = _notifier()
-        for t in NOTIFICATION_DEFAULTS:
-            assert n.is_type_enabled(t)
+        # Only types that explicitly default to True should be enabled by default.
+        # Some V4 types (e.g. rate_limit_switch) intentionally default to False.
+        for t, default_on in NOTIFICATION_DEFAULTS.items():
+            assert n.is_type_enabled(t) is default_on
 
     def test_enabled_globally(self) -> None:
         n = _notifier()
@@ -107,7 +109,9 @@ class TestNotifierNotify:
         n = Notifier(enabled=True, backend=mock_backend)
         for t in NOTIFICATION_DEFAULTS:
             n.notify(t, f"Title for {t}", "msg")
-        assert mock_backend.send.call_count == len(NOTIFICATION_DEFAULTS)
+        # Only types that default to True will trigger backend.send
+        expected_calls = sum(1 for v in NOTIFICATION_DEFAULTS.values() if v)
+        assert mock_backend.send.call_count == expected_calls
 
 
 class TestNotifierStatus:

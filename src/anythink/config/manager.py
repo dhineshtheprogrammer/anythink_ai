@@ -86,6 +86,32 @@ class Paths:
     def debug_exports_dir(self) -> Path:
         return self.data_dir / "debug_exports"
 
+    # --- V4 MMOS paths ---
+
+    @property
+    def model_capability_registry_file(self) -> Path:
+        return self.data_dir / "model_registry.json"
+
+    @property
+    def model_capability_registry_user_file(self) -> Path:
+        return self.config_dir / "model_registry_user.json"
+
+    @property
+    def optimize_settings_file(self) -> Path:
+        return self.config_dir / "optimize_settings.yaml"
+
+    @property
+    def routing_rules_file(self) -> Path:
+        return self.config_dir / "routing_rules.yaml"
+
+    @property
+    def rate_limit_state_file(self) -> Path:
+        return self.state_dir / "rate_limit_state.json"
+
+    @property
+    def plans_dir(self) -> Path:
+        return self.data_dir / "plans"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.config_dir,
@@ -97,6 +123,7 @@ class Paths:
             self.rag_dir,
             self.rag_cache_dir,
             self.exports_dir,
+            self.plans_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -144,6 +171,12 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "icon_style": frozenset({"unicode", "ascii"}),
     # V3
     "spend_budget_period": frozenset({"daily", "monthly"}),
+    # V4 MMOS
+    "mmos_mode": frozenset({"online", "offline", "auto"}),
+    "mmos_priority": frozenset({"quality", "reliability", "hybrid"}),
+    "mmos_history_mode": frozenset({"semantic", "recency", "model_decides"}),
+    "mmos_mixing_mode": frozenset({"routing", "ensemble", "chaining", "decompose"}),
+    "mmos_orchestration": frozenset({"deterministic", "meta_llm", "auto"}),
 }
 
 
@@ -208,6 +241,10 @@ class ConfigManager:
             notifications = {}
 
         spend_budget_soft_limit = raw.get("spend_budget_soft_limit")
+        mmos_fallback_raw = raw.get("mmos_fallback_order", [])
+        mmos_fallback: tuple[str, ...] = (
+            tuple(str(x) for x in mmos_fallback_raw) if isinstance(mmos_fallback_raw, list) else ()
+        )
         return AppConfig(
             default_model_alias=raw.get("default_model_alias"),
             active_theme=raw.get("active_theme", "midnight"),
@@ -234,6 +271,17 @@ class ConfigManager:
                 float(spend_budget_soft_limit) if spend_budget_soft_limit is not None else None
             ),
             spend_budget_period=str(raw.get("spend_budget_period", "monthly")),
+            # V4 MMOS
+            mmos_enabled=bool(raw.get("mmos_enabled", False)),
+            mmos_mode=str(raw.get("mmos_mode", "auto")),
+            mmos_priority=str(raw.get("mmos_priority", "quality")),
+            mmos_microprompt=bool(raw.get("mmos_microprompt", True)),
+            mmos_history_mode=str(raw.get("mmos_history_mode", "semantic")),
+            mmos_history_max_tokens=int(raw.get("mmos_history_max_tokens", 2048)),
+            mmos_mixing_mode=str(raw.get("mmos_mixing_mode", "routing")),
+            mmos_plan_mode=bool(raw.get("mmos_plan_mode", True)),
+            mmos_orchestration=str(raw.get("mmos_orchestration", "auto")),
+            mmos_fallback_order=mmos_fallback,
         )
 
     def save(self, config: AppConfig) -> None:
@@ -272,5 +320,18 @@ class ConfigManager:
         data["spend_budget_period"] = config.spend_budget_period
         if config.spend_budget_soft_limit is not None:
             data["spend_budget_soft_limit"] = config.spend_budget_soft_limit
+
+        # V4 MMOS fields
+        data["mmos_enabled"] = config.mmos_enabled
+        data["mmos_mode"] = config.mmos_mode
+        data["mmos_priority"] = config.mmos_priority
+        data["mmos_microprompt"] = config.mmos_microprompt
+        data["mmos_history_mode"] = config.mmos_history_mode
+        data["mmos_history_max_tokens"] = config.mmos_history_max_tokens
+        data["mmos_mixing_mode"] = config.mmos_mixing_mode
+        data["mmos_plan_mode"] = config.mmos_plan_mode
+        data["mmos_orchestration"] = config.mmos_orchestration
+        if config.mmos_fallback_order:
+            data["mmos_fallback_order"] = list(config.mmos_fallback_order)
 
         self.paths.config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=True))

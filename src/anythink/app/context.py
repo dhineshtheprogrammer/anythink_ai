@@ -21,6 +21,16 @@ from anythink.mcp.builtin.search import SearchServer
 from anythink.mcp.builtin.sessions import SessionsServer
 from anythink.mcp.manager import MCPManager
 from anythink.notify.notifier import Notifier
+from anythink.optimize.classifier import IntentClassifier
+from anythink.optimize.context_engine import ContextRelevanceEngine
+from anythink.optimize.mixing import MixingOrchestrator
+from anythink.optimize.plan_engine import PlanEngine
+from anythink.optimize.plan_runner import PlanRunner
+from anythink.optimize.rate_limit import RateLimitManager
+from anythink.optimize.registry import ModelCapabilityRegistry
+from anythink.optimize.router import RoutingEngine
+from anythink.optimize.rules import RoutingRulesLoader
+from anythink.optimize.settings_manager import OptimizeSettingsManager
 from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
 from anythink.rag.manager import RAGManager
@@ -63,6 +73,15 @@ class AppContext:
     template_manager: TemplateManager
     schedule_manager: ScheduleManager
     debug_manager: DebugManager
+    # --- V4 MMOS ---
+    mmos_registry: ModelCapabilityRegistry
+    mmos_settings: OptimizeSettingsManager
+    rate_limit_manager: RateLimitManager
+    routing_engine: RoutingEngine
+    context_engine: ContextRelevanceEngine
+    plan_engine: PlanEngine
+    plan_runner: PlanRunner
+    mixing_orchestrator: MixingOrchestrator
 
     @classmethod
     def create(
@@ -113,6 +132,46 @@ class AppContext:
         if config.debug_api_logging:
             debug_manager.toggle_api_logging()
 
+        # V4 MMOS subsystems
+        mmos_registry = ModelCapabilityRegistry(
+            bundled_path=None,  # loads from importlib.resources (anythink.data)
+            user_path=resolved.model_capability_registry_user_file,
+        )
+        mmos_settings = OptimizeSettingsManager(path=resolved.optimize_settings_file)
+        rate_limit_manager = RateLimitManager(
+            state_path=resolved.rate_limit_state_file,
+            registry=mmos_registry,
+        )
+        _opt_settings = mmos_settings.get()
+        routing_engine = RoutingEngine(
+            registry=mmos_registry,
+            rate_limit_manager=rate_limit_manager,
+            settings=_opt_settings,
+            rules_loader=RoutingRulesLoader(path=resolved.routing_rules_file),
+            classifier=IntentClassifier(),
+        )
+        context_engine = ContextRelevanceEngine(
+            settings=_opt_settings,
+            embedding_backend=emb,
+        )
+        plan_engine = PlanEngine(
+            registry=mmos_registry,
+            rate_limit_manager=rate_limit_manager,
+            settings=_opt_settings,
+        )
+        plan_runner = PlanRunner(
+            registry=mmos_registry,
+            rate_limit_manager=rate_limit_manager,
+            plans_dir=resolved.plans_dir,
+        )
+        mixing_orchestrator = MixingOrchestrator(
+            registry=mmos_registry,
+            rate_limit_manager=rate_limit_manager,
+            settings=_opt_settings,
+            plan_engine=plan_engine,
+            plan_runner=plan_runner,
+        )
+
         return cls(
             config=config,
             paths=resolved,
@@ -135,4 +194,12 @@ class AppContext:
             template_manager=TemplateManager(path=resolved.templates_file),
             schedule_manager=ScheduleManager(path=resolved.schedules_file),
             debug_manager=debug_manager,
+            mmos_registry=mmos_registry,
+            mmos_settings=mmos_settings,
+            rate_limit_manager=rate_limit_manager,
+            routing_engine=routing_engine,
+            context_engine=context_engine,
+            plan_engine=plan_engine,
+            plan_runner=plan_runner,
+            mixing_orchestrator=mixing_orchestrator,
         )

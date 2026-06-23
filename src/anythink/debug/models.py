@@ -7,6 +7,8 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from anythink.optimize.models import RoutingDecision
+    from anythink.optimize.plan import ExecutionPlan
     from anythink.providers.base import GenerationParams, TokenUsage
     from anythink.rag.models import RetrievalResult
 
@@ -104,6 +106,12 @@ class RequestDebugRecord:
     http_log: HttpLogEntry | None = None
     token_trace: list[TokenEntry] = field(default_factory=list)  # Level 3 only
     agent_thinking: str = ""  # Anthropic extended thinking, if available
+
+    # ── V4 MMOS data (populated when optimization engine is active) ────────
+    routing_decision: RoutingDecision | None = None
+    history_selection_log: list[dict[str, Any]] = field(default_factory=list)
+    rate_limit_events: list[dict[str, Any]] = field(default_factory=list)
+    plan_trace: ExecutionPlan | None = None
 
     # ── convenience properties ────────────────────────────────────────────
 

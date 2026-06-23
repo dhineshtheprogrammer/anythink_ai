@@ -235,6 +235,11 @@ def register_commands(registry: CommandRegistry) -> None:
 
     register_debug_commands(registry)
 
+    # ── V4 optimization commands ───────────────────────────────────────────
+    from anythink.optimize.commands import register_optimize_commands
+
+    register_optimize_commands(registry)
+
     registry.register(
         SlashCommand(
             "preview",

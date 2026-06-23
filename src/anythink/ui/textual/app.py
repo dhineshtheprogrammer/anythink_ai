@@ -37,9 +37,15 @@ from anythink.ui.startup import (
 from anythink.ui.textual.conversation import ConversationView
 from anythink.ui.textual.hint_bar import HintBar
 from anythink.ui.textual.input_area import InputArea
+from anythink.ui.textual.microprompt import MicroPromptWidget
+from anythink.ui.textual.override_caution_modal import OverrideCautionModal
 from anythink.ui.textual.panels.debug_panel import DebugPanel
 from anythink.ui.textual.panels.file_browser import FileBrowserTab
+from anythink.ui.textual.panels.optimize_panel import OptimizePanel
+from anythink.ui.textual.panels.phase_tracker import PhaseTrackerPanel
+from anythink.ui.textual.panels.plan_review_panel import PlanReviewPanel
 from anythink.ui.textual.panels.rag_browser import RAGBrowserTab
+from anythink.ui.textual.panels.ratelimit_panel import RateLimitPanel
 from anythink.ui.textual.panels.session_list import SessionListPanel
 from anythink.ui.textual.panels.stats import StatsPanel
 from anythink.ui.textual.panels.tool_output import ToolOutputTab
@@ -177,6 +183,18 @@ class AnythinkApp(App[int]):
         # Update confirm: set by /update when a newer version is available
         self._pending_update: bool = False
 
+        # ── V4 MMOS state ──────────────────────────────────────────────────
+        import asyncio as _asyncio
+
+        self._microprompt_event: _asyncio.Event = _asyncio.Event()
+        self._microprompt_result: Any = None  # QueryIntent | None
+        self._plan_approval_event: _asyncio.Event = _asyncio.Event()
+        self._plan_approval_result: bool = False
+        self._plan_abort_signal: _asyncio.Event = _asyncio.Event()
+        self._override_confirm_event: _asyncio.Event = _asyncio.Event()
+        self._override_proceed: bool = False
+        self._pending_optimize_reset: bool = False
+
     # ── widget tree ────────────────────────────────────────────────────────
 
     def compose(self) -> ComposeResult:
@@ -194,6 +212,12 @@ class AnythinkApp(App[int]):
             with TabPane("Tools", id="tab-tools"):
                 yield ToolOutputTab(id="tool-output")
         yield SettingsMenu(self._ctx, self._ctx.theme, id="settings-menu")
+        yield OptimizePanel(self._ctx, self._ctx.theme, id="optimize-panel")
+        yield RateLimitPanel(id="ratelimit-panel")
+        yield PlanReviewPanel(id="plan-review-panel")
+        yield PhaseTrackerPanel(id="phase-tracker-panel")
+        yield MicroPromptWidget(id="microprompt")
+        yield OverrideCautionModal(id="override-caution")
         yield TipsBar(self._ctx.theme, id="tips-bar")
         yield InputArea()
         yield HintBar(self._ctx.theme, id="hint-bar")
@@ -337,6 +361,22 @@ class AnythinkApp(App[int]):
             await self._handle_update_confirmation(text)
             return
 
+        # ── optimize reset confirmation ────────────────────────────────────
+        if self._pending_optimize_reset:
+            self._pending_optimize_reset = False
+            if text.strip().lower() in ("y", "yes"):
+                self._ctx.mmos_settings.reset()
+                self._sync_mmos_hud()
+                conv = self.query_one(ConversationView)
+                conv.add_bubble(
+                    SystemBubble(
+                        "Optimization settings reset to defaults.",
+                        self._ctx.theme,
+                        kind="info",
+                    )
+                )
+            return
+
         if not text or self._state is None:
             return
 
@@ -368,6 +408,16 @@ class AnythinkApp(App[int]):
             )
             self.run_worker(
                 self._run_comparison(state, text, aliases),
+                exclusive=False,
+                exit_on_error=False,
+            )
+            return
+
+        # ── V4 MMOS query pipeline ─────────────────────────────────────────
+        if self._ctx.config.mmos_enabled:
+            conv.add_bubble(UserBubble(text, t, config=self._ctx.config))
+            self.run_worker(
+                self._run_mmos_query(state, text),
                 exclusive=False,
                 exit_on_error=False,
             )
@@ -1389,6 +1439,58 @@ class AnythinkApp(App[int]):
                 conv.add_bubble(SystemBubble("No record found to replay.", t, kind="error"))
             return
 
+        # ── V4 MMOS action signals ─────────────────────────────────────────
+        if result.action == "open_optimize_panel":
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self.query_one(OptimizePanel).open()
+            return
+
+        if result.action == "open_ratelimit_panel":
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                self.query_one(RateLimitPanel).open(self._ctx, self._ctx.theme)
+            return
+
+        if result.action == "mmos_hud_update":
+            self._sync_mmos_hud()
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "optimize_reset_confirm":
+            self._pending_optimize_reset = True
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="warning"))
+            return
+
+        if result.action == "open_optimize_registry":
+            caps = self._ctx.mmos_registry.all()
+            lines = [f"Model Capability Registry  ({len(caps)} entries)", ""]
+            for cap in caps[:20]:
+                strengths = ", ".join(cap.strength_categories[:3]) or "general"
+                lines.append(
+                    f"  {cap.id:<42} {cap.tier:<10} {cap.speed_class:<7} {strengths}"
+                )
+            if len(caps) > 20:
+                lines.append(f"  … and {len(caps) - 20} more")
+            conv.add_bubble(SystemBubble("\n".join(lines), t, kind="info"))
+            return
+
+        if result.action in ("open_optimize_registry_add", "open_optimize_registry_edit"):
+            model_id = result.extra.get("model_id", "")
+            action_label = "add" if result.action.endswith("_add") else f"edit: {model_id}"
+            conv.add_bubble(
+                SystemBubble(
+                    f"Registry {action_label} — use /optimize registry commands to manage entries.",
+                    t,
+                    kind="info",
+                )
+            )
+            return
+
         if result.should_exit:
             self.exit(0)
             return
@@ -2248,3 +2350,367 @@ class AnythinkApp(App[int]):
             conv.add_bubble(
                 SystemBubble(f"Schedule '{schedule_name}' failed: {exc}", t, kind="error")
             )
+
+    # ── V4 MMOS helpers ────────────────────────────────────────────────────
+
+    def _sync_mmos_hud(self) -> None:
+        """Update HUD reactive fields from the live optimize settings."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            s = self._ctx.mmos_settings.get()
+            hud = self.query_one(HUDWidget)
+            hud.mmos_enabled = s.enabled
+            hud.mmos_mode = s.mode
+            hud.mmos_strategy = s.mixing_mode
+
+    # ── V4 MMOS widget message handlers ───────────────────────────────────
+
+    def on_micro_prompt_widget_confirmed(self, event: MicroPromptWidget.Confirmed) -> None:
+        self._microprompt_result = event.intent
+        self._microprompt_event.set()
+
+    def on_micro_prompt_widget_skipped(self, _event: MicroPromptWidget.Skipped) -> None:
+        self._microprompt_result = None
+        self._microprompt_event.set()
+
+    def on_plan_review_panel_approved(self, _event: PlanReviewPanel.Approved) -> None:
+        self._plan_approval_result = True
+        self._plan_approval_event.set()
+
+    def on_plan_review_panel_rejected(self, _event: PlanReviewPanel.Rejected) -> None:
+        self._plan_approval_result = False
+        self._plan_approval_event.set()
+
+    def on_plan_review_panel_regenerate(self, _event: PlanReviewPanel.Regenerate) -> None:
+        self._plan_approval_result = False
+        self._plan_approval_event.set()
+
+    def on_phase_tracker_panel_abort_requested(
+        self, _event: PhaseTrackerPanel.AbortRequested
+    ) -> None:
+        self._plan_abort_signal.set()
+
+    def on_phase_tracker_panel_pause_requested(
+        self, _event: PhaseTrackerPanel.PauseRequested
+    ) -> None:
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self.query_one(ConversationView).add_bubble(
+                SystemBubble(
+                    "Plan Mode paused. Press any key to resume…",
+                    self._ctx.theme,
+                    kind="info",
+                )
+            )
+
+    def on_override_caution_modal_proceed(self, _event: OverrideCautionModal.Proceed) -> None:
+        self._override_proceed = True
+        self._override_confirm_event.set()
+
+    def on_override_caution_modal_use_recommended(
+        self, _event: OverrideCautionModal.UseRecommended
+    ) -> None:
+        self._override_proceed = False
+        self._override_confirm_event.set()
+
+    def on_override_caution_modal_cancelled(self, _event: OverrideCautionModal.Cancelled) -> None:
+        self._override_proceed = False
+        self._override_confirm_event.set()
+
+    def on_optimize_panel_closed(self, _event: OptimizePanel.Closed) -> None:
+        self._sync_mmos_hud()
+
+    # ── V4 MMOS query worker ───────────────────────────────────────────────
+
+    async def _run_mmos_query(self, state: ChatState, raw_text: str) -> None:
+        """V4 MMOS query pipeline worker.
+
+        Runs routing, context selection, and the chosen mixing strategy.
+        Interactive steps (microprompt, plan approval) use asyncio.Event.
+        """
+        import asyncio
+        import contextlib
+        import dataclasses
+        import time
+
+        from anythink.optimize.classifier import IntentClassifier
+        from anythink.optimize.models import QueryIntent, RoutingDecision, TurnMMOSMetadata
+        from anythink.providers.base import BaseProvider
+        from anythink.providers.base import ChatMessage as _CM
+
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+        classifier = IntentClassifier()
+        opt = self._ctx.mmos_settings.get()
+
+        # 1. Extract override flags
+        clean_query, override_flags = classifier.extract_override_flags(raw_text)
+        effective_query = clean_query or raw_text
+
+        # 2. Show AI bubble + thinking widget
+        bubble = AIBubble(t, model_alias="MMOS", provider="", config=self._ctx.config)
+        thinking = ThinkingWidget(t)
+
+        def _add_bubble_pair() -> None:
+            conv.add_bubble(bubble)
+            conv.add_bubble(thinking)
+
+        self.call_from_thread(_add_bubble_pair)
+
+        # 3. Classify intent (system inference as baseline)
+        intent: QueryIntent = classifier.classify(effective_query)
+
+        # 4. Micro-prompt (if enabled — don't block >30s)
+        if opt.microprompt_enabled:
+            self._microprompt_event.clear()
+            self._microprompt_result = None
+
+            def _show_mp() -> None:
+                with contextlib.suppress(Exception):
+                    self.query_one(MicroPromptWidget).show(intent.category, t)
+
+            self.call_from_thread(_show_mp)
+            try:
+                await asyncio.wait_for(self._microprompt_event.wait(), timeout=30.0)
+                if self._microprompt_result is not None:
+                    intent = self._microprompt_result
+            except TimeoutError:
+                pass
+
+            def _hide_mp() -> None:
+                with contextlib.suppress(Exception):
+                    self.query_one(MicroPromptWidget).hide()
+
+            self.call_from_thread(_hide_mp)
+
+        # 5. Select relevant history
+        thinking.set_context("Selecting context…")
+        try:
+            relevant_history = await self._ctx.context_engine.select_relevant_history(
+                state.history, effective_query
+            )
+        except Exception:
+            relevant_history = list(state.history)
+
+        # Build messages list for model calls
+        user_msg = _CM(role="user", content=effective_query)
+        messages_for_model = relevant_history + [user_msg]
+
+        # 6. Routing decision
+        hist_tokens = sum(
+            len(m.content if isinstance(m.content, str) else "") // 4
+            for m in relevant_history
+        )
+        try:
+            routing_decision = self._ctx.routing_engine.decide(
+                query=effective_query,
+                intent=intent,
+                history_token_estimate=hist_tokens,
+                override_flags=override_flags,
+                mode=opt.mode,
+            )
+        except Exception:
+            routing_decision = RoutingDecision(strategy="routing", primary_model="")
+
+        # 7. Override conflict check
+        if override_flags.get("model"):
+            token_estimate = classifier.estimate_tokens(effective_query)
+            conflict = self._ctx.routing_engine.detect_override_conflict(
+                override_flags, routing_decision, token_estimate
+            )
+            if conflict:
+                self._override_confirm_event.clear()
+                self._override_proceed = False
+
+                def _show_caution() -> None:
+                    with contextlib.suppress(Exception):
+                        self.query_one(OverrideCautionModal).show_conflict(
+                            override_flags.get("model", ""),
+                            conflict,
+                            routing_decision.primary_model,
+                            t,
+                        )
+
+                self.call_from_thread(_show_caution)
+                await self._override_confirm_event.wait()
+
+                if not self._override_proceed:
+
+                    def _cancel_bubbles() -> None:
+                        with contextlib.suppress(Exception):
+                            thinking.remove()
+                        with contextlib.suppress(Exception):
+                            bubble.show_error("Query cancelled.")
+
+                    self.call_from_thread(_cancel_bubbles)
+                    return
+
+        # 8. Build provider resolver
+        def _resolve_provider(model_id: str) -> tuple[BaseProvider, str] | None:
+            if "/" not in model_id:
+                return None
+            provider_name, api_model_id = model_id.split("/", 1)
+            try:
+                api_key = self._ctx.key_manager.get_key(provider_name)
+                base_url = self._ctx.config.local_servers.get(provider_name)
+                provider = self._ctx.provider_registry.instantiate(
+                    provider_name, api_key, base_url
+                )
+                return provider, api_model_id
+            except Exception:
+                return None
+
+        t0 = time.monotonic()
+
+        # 9. Plan Mode
+        if routing_decision.plan_mode and opt.plan_mode_enabled:
+            thinking.set_context("Generating execution plan…")
+            try:
+                plan = await self._ctx.plan_engine.generate_plan(
+                    query=effective_query,
+                    intent=intent,
+                    routing_decision=routing_decision,
+                    provider_resolver=_resolve_provider,
+                    session_id=state.session_id,
+                    mode=opt.mode,
+                )
+            except Exception:
+                plan = None
+
+            if plan is not None and opt.plan_approval_required:
+                self._pending_plan = plan
+                self._plan_approval_event.clear()
+                self._plan_approval_result = False
+
+                def _show_review() -> None:
+                    with contextlib.suppress(Exception):
+                        self.query_one(PlanReviewPanel).show_plan(plan, t)
+
+                self.call_from_thread(_show_review)
+                await self._plan_approval_event.wait()
+
+                if not self._plan_approval_result:
+
+                    def _cancel_plan() -> None:
+                        with contextlib.suppress(Exception):
+                            thinking.remove()
+                        with contextlib.suppress(Exception):
+                            bubble.show_error("Plan rejected.")
+
+                    self.call_from_thread(_cancel_plan)
+                    return
+
+            if plan is not None:
+                self._plan_abort_signal.clear()
+
+                from anythink.optimize.plan import PhaseUpdate
+
+                def _show_tracker() -> None:
+                    with contextlib.suppress(Exception):
+                        tracker = self.query_one(PhaseTrackerPanel)
+                        tracker.set_plan(plan, t)
+                    with contextlib.suppress(Exception):
+                        thinking.display = False
+
+                self.call_from_thread(_show_tracker)
+
+                def _on_phase_update(update: PhaseUpdate) -> None:
+                    with contextlib.suppress(Exception):
+                        self.call_from_thread(
+                            self.query_one(PhaseTrackerPanel).update_phase, update
+                        )
+
+                try:
+                    executed = await self._ctx.plan_runner.execute(
+                        plan=plan,
+                        provider_resolver=_resolve_provider,
+                        on_phase_update=_on_phase_update,
+                        abort_signal=self._plan_abort_signal,
+                    )
+                    final_text = executed.final_output or "[Plan completed — no output]"
+                    model_ids = executed.unique_models
+                    total_tokens = sum(len(p.output) // 4 for p in executed.phases)
+                except Exception as exc:
+                    final_text = f"[Plan execution error: {exc}]"
+                    model_ids = []
+                    total_tokens = 0
+
+                def _hide_tracker() -> None:
+                    with contextlib.suppress(Exception):
+                        self.query_one(PhaseTrackerPanel).display = False
+
+                self.call_from_thread(_hide_tracker)
+            else:
+                final_text = "[Plan generation failed]"
+                model_ids = []
+                total_tokens = 0
+
+        else:
+            # 10. Normal mixing strategy
+            thinking.set_context("Thinking…")
+
+            try:
+                mix = await self._ctx.mixing_orchestrator.execute(
+                    decision=routing_decision,
+                    messages=messages_for_model,
+                    intent=intent,
+                    provider_resolver=_resolve_provider,
+                    session_id=state.session_id,
+                )
+                final_text = mix.final_text
+                model_ids = mix.metadata.model_ids
+                total_tokens = mix.total_tokens
+            except Exception as exc:
+                final_text = f"[MMOS error: {exc}]"
+                model_ids = []
+                total_tokens = 0
+
+        elapsed = time.monotonic() - t0
+
+        # 11. Record MMOS metadata + append messages to history
+        mmos_meta = TurnMMOSMetadata(
+            strategy=routing_decision.strategy,
+            model_ids=model_ids,
+            intent=intent,
+            routing_decision=routing_decision,
+            total_tokens=total_tokens,
+            elapsed_s=elapsed,
+        )
+        state.history.append(dataclasses.replace(user_msg, metadata={"mmos": mmos_meta.to_dict()}))
+        ai_msg = _CM(role="assistant", content=final_text)
+        state.history.append(ai_msg)
+        state.total_tokens_used += total_tokens
+        self._last_response_text = final_text
+
+        # 12. Finalize bubble
+        def _finish() -> None:
+            with contextlib.suppress(Exception):
+                thinking.remove()
+            with contextlib.suppress(Exception):
+                bubble.finalize_with_mmos(final_text, mmos_meta)
+
+        self.call_from_thread(_finish)
+
+        # 13. Update rate limits + HUD
+        for mid in model_ids:
+            self._ctx.rate_limit_manager.record_request(mid, max(1, total_tokens // len(model_ids)))
+
+        self._sync_mmos_hud()
+
+        # 14. Autosave
+        if self._ctx.config.session_autosave:
+            with contextlib.suppress(Exception):
+                self._ctx.session_manager.save(_build_session(state))
+
+        # 15. Notify on long responses
+        if elapsed > 30.0:
+            self._ctx.notifier.notify(
+                "plan_mode_complete",
+                "Anythink",
+                f"MMOS response complete ({elapsed:.0f}s)",
+            )
+
+        # Prune tracking dicts
+        self._prune_history_tracking()

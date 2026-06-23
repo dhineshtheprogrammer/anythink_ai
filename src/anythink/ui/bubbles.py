@@ -18,6 +18,7 @@ from anythink.ui.timestamp import format_timestamp
 
 if TYPE_CHECKING:
     from anythink.config.schema import AppConfig
+    from anythink.optimize.models import TurnMMOSMetadata
     from anythink.rag.models import RetrievalResult
 
 
@@ -198,6 +199,33 @@ class AIBubble(Static):
             Markdown(full_text) if full_text.strip() else Text("", style=self._theme.muted)
         )
         self._redraw(body)
+
+    def finalize_with_mmos(self, full_text: str, mmos: TurnMMOSMetadata | None) -> None:
+        """Like finalize() but prepends an MMOS attribution header line."""
+        if mmos is not None:
+            header = self._render_attribution_header(mmos)
+            self._buffer = full_text
+            word_count, symbol = length_indicator(full_text)
+            self._length_suffix = f"{word_count:,} words {symbol}"
+            body: RenderableType = (
+                Markdown(full_text) if full_text.strip() else Text("", style=self._theme.muted)
+            )
+            self._redraw(Group(header, body))
+        else:
+            self.finalize(full_text)
+
+    def _render_attribution_header(self, mmos: TurnMMOSMetadata) -> Text:
+        """Produce  ── model · strategy · tokens · elapsed ──  line."""
+        t = self._theme
+        models_str = ", ".join(mmos.model_ids[:3]) if mmos.model_ids else "?"
+        tokens_str = f"{mmos.total_tokens:,} tokens"
+        elapsed_str = f"{mmos.elapsed_s:.1f}s"
+        line = Text()
+        line.append("── ", style=t.muted)
+        line.append(models_str, style=t.accent)
+        line.append(f"  ·  {mmos.strategy}  ·  {tokens_str}  ·  {elapsed_str}", style=t.muted)
+        line.append("  ──", style=t.muted)
+        return line
 
     def show_error(self, message: str) -> None:
         """Replace the bubble content with an error message."""

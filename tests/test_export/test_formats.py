@@ -96,3 +96,91 @@ class TestExportPdf:
         export_pdf(session, out)
         assert out.exists()
         assert out.stat().st_size > 0
+
+
+# ── V4 MMOS export tests ───────────────────────────────────────────────────────
+
+
+def _make_session_with_mmos(tmp_path: Path) -> MagicMock:
+    """Session with an AI message that carries MMOS metadata."""
+    from anythink.session.models import Session
+
+    mmos_meta = {
+        "strategy": "ensemble",
+        "model_ids": ["groq/llama3-70b", "ollama/mistral"],
+        "total_tokens": 2500,
+        "elapsed_s": 3.2,
+        "intent": None,
+        "routing_decision": None,
+        "plan_session_id": None,
+        "phase_outputs": [],
+    }
+    messages = [
+        ChatMessage(role="user", content="Tell me about Python", metadata={}),
+        ChatMessage(
+            role="assistant",
+            content="Python is a great language!",
+            metadata={"mmos": mmos_meta},
+        ),
+    ]
+    return Session(
+        id="mmos-session",
+        provider="groq",
+        model_id="llama3-70b",
+        name="MMOS Session",
+        messages=messages,
+    )
+
+
+class TestExportJsonWithMMOS:
+    def test_mmos_metadata_included_in_assistant_message(self, tmp_path: Path) -> None:
+        session = _make_session_with_mmos(tmp_path)
+        out = tmp_path / "export_mmos.json"
+        export_json(session, out)
+        data = json.loads(out.read_text())
+        ai_msg = next(m for m in data["messages"] if m["role"] == "assistant")
+        assert "mmos" in ai_msg
+        assert ai_msg["mmos"]["strategy"] == "ensemble"
+        assert ai_msg["mmos"]["total_tokens"] == 2500
+
+    def test_user_message_has_no_mmos_key(self, tmp_path: Path) -> None:
+        session = _make_session_with_mmos(tmp_path)
+        out = tmp_path / "export_mmos.json"
+        export_json(session, out)
+        data = json.loads(out.read_text())
+        user_msg = next(m for m in data["messages"] if m["role"] == "user")
+        assert "mmos" not in user_msg
+
+    def test_message_without_mmos_has_no_mmos_key(self, tmp_path: Path) -> None:
+        session = _make_session(tmp_path)  # uses the plain session without MMOS
+        out = tmp_path / "export_no_mmos.json"
+        export_json(session, out)
+        data = json.loads(out.read_text())
+        for msg in data["messages"]:
+            assert "mmos" not in msg
+
+    def test_model_ids_preserved(self, tmp_path: Path) -> None:
+        session = _make_session_with_mmos(tmp_path)
+        out = tmp_path / "export_mmos.json"
+        export_json(session, out)
+        data = json.loads(out.read_text())
+        ai_msg = next(m for m in data["messages"] if m["role"] == "assistant")
+        assert ai_msg["mmos"]["model_ids"] == ["groq/llama3-70b", "ollama/mistral"]
+
+
+class TestExportMarkdownWithMMOS:
+    def test_attribution_header_in_assistant_section(self, tmp_path: Path) -> None:
+        session = _make_session_with_mmos(tmp_path)
+        out = tmp_path / "export_mmos.md"
+        export_markdown(session, out)
+        content = out.read_text()
+        # Attribution header should appear in markdown for AI turns
+        assert "ensemble" in content
+        assert "groq/llama3-70b" in content
+
+    def test_message_content_still_present(self, tmp_path: Path) -> None:
+        session = _make_session_with_mmos(tmp_path)
+        out = tmp_path / "export_mmos.md"
+        export_markdown(session, out)
+        content = out.read_text()
+        assert "Python is a great language!" in content

@@ -29,6 +29,16 @@ def _content_to_text(content: Any) -> str:
     return str(content)
 
 
+def _mmos_header_text(mmos_raw: dict[str, Any]) -> str:
+    """Produce a plain-text attribution line from a raw MMOS metadata dict."""
+    strategy = mmos_raw.get("strategy", "routing")
+    model_ids = mmos_raw.get("model_ids", [])
+    total_tokens = mmos_raw.get("total_tokens", 0)
+    elapsed_s = mmos_raw.get("elapsed_s", 0.0)
+    models_str = ", ".join(model_ids[:3]) if model_ids else "?"
+    return f"── {models_str}  ·  {strategy}  ·  {total_tokens:,} tokens  ·  {elapsed_s:.1f}s ──"
+
+
 def export_markdown(
     session: Session,
     path: Path,
@@ -54,6 +64,11 @@ def export_markdown(
         text = _content_to_text(msg.content)
         lines.append(f"### {role_label}")
         lines.append("")
+        # V4: prepend MMOS attribution header for AI turns that have metadata
+        mmos_raw = msg.metadata.get("mmos") if hasattr(msg, "metadata") else None
+        if mmos_raw and msg.role == "assistant":
+            lines.append(f"*{_mmos_header_text(mmos_raw)}*")
+            lines.append("")
         lines.append(text)
         lines.append("")
         lines.append("---")
@@ -71,6 +86,18 @@ def export_json(
 ) -> None:
     """Export session as a structured JSON file."""
     messages = _get_messages(session, message_range)
+    def _msg_dict(msg: Any) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "role": msg.role,
+            "content": _content_to_text(msg.content),
+            "timestamp": msg.timestamp.isoformat(),
+        }
+        # V4: include MMOS metadata when present
+        mmos_raw = msg.metadata.get("mmos") if hasattr(msg, "metadata") else None
+        if mmos_raw:
+            d["mmos"] = mmos_raw
+        return d
+
     data: dict[str, Any] = {
         "id": session.id,
         "name": session.name,
@@ -78,14 +105,7 @@ def export_json(
         "model_id": session.model_id,
         "created_at": session.created_at.isoformat(),
         "updated_at": session.updated_at.isoformat(),
-        "messages": [
-            {
-                "role": msg.role,
-                "content": _content_to_text(msg.content),
-                "timestamp": msg.timestamp.isoformat(),
-            }
-            for msg in messages
-        ],
+        "messages": [_msg_dict(msg) for msg in messages],
         "message_count": len(messages),
     }
     path.parent.mkdir(parents=True, exist_ok=True)

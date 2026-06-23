@@ -50,6 +50,18 @@ class AppConfig:
     debug_level: int = 2  # 1 | 2 | 3
     debug_api_logging: bool = False
 
+    # --- V4 MMOS fields (mmos_enabled=False preserves pure V3 behaviour) ---
+    mmos_enabled: bool = False
+    mmos_mode: str = "auto"  # "online" | "offline" | "auto"
+    mmos_priority: str = "quality"  # "quality" | "reliability" | "hybrid"
+    mmos_microprompt: bool = True
+    mmos_history_mode: str = "semantic"  # "semantic" | "recency" | "model_decides"
+    mmos_history_max_tokens: int = 2048
+    mmos_mixing_mode: str = "routing"  # "routing" | "ensemble" | "chaining" | "decompose"
+    mmos_plan_mode: bool = True
+    mmos_orchestration: str = "auto"  # "deterministic" | "meta_llm" | "auto"
+    mmos_fallback_order: tuple[str, ...] = field(default_factory=tuple)
+
     VALID_THEMES: frozenset[str] = field(
         default=frozenset(
             {
