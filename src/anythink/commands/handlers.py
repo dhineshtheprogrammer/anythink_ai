@@ -341,7 +341,70 @@ async def _model(
     state: ChatState,
     registry: CommandRegistry,
 ) -> CommandResult:
-    return CommandResult(message=f"Provider: {state.provider.name}  Model: {state.model_id}")
+    # No args → show current model
+    if not args:
+        aliases = ctx.model_registry.list_all()
+        lines = [f"Active:  {state.provider.name} / {state.model_id}", ""]
+        if aliases:
+            lines.append("Available aliases:")
+            for a in aliases:
+                marker = "▶" if a.alias == ctx.config.default_model_alias else " "
+                lines.append(f"  {marker} {a.alias}  ({a.provider} / {a.model_id})")
+        return CommandResult(message="\n".join(lines))
+
+    # Args provided → switch to the named alias
+    alias = ctx.model_registry.get(args)
+    if alias is None:
+        aliases = ctx.model_registry.list_all()
+        names = ", ".join(a.alias for a in aliases) or "(none configured)"
+        return CommandResult(
+            error=True,
+            message=f"Alias '{args}' not found.\nAvailable: {names}",
+        )
+
+    api_key = ctx.key_manager.get_key(alias.provider)
+
+    from anythink.exceptions import AnythinkError
+
+    try:
+        provider = ctx.provider_registry.instantiate(
+            alias.provider,
+            api_key=api_key,
+            base_url=ctx.config.local_servers.get(alias.provider),
+        )
+    except AnythinkError as exc:
+        return CommandResult(
+            error=True,
+            message=f"Failed to load provider '{alias.provider}': {exc.user_message}",
+        )
+
+    if api_key is None and provider.requires_api_key:
+        return CommandResult(
+            error=True,
+            message=(
+                f"No API key for '{alias.provider}'.\n"
+                f"Add one with:  anythink keys add {alias.provider}"
+            ),
+        )
+
+    # Update live session state
+    state.provider = provider
+    state.model_id = alias.model_id
+    state.context_window = alias.context_window
+    if hasattr(alias, "gen_params"):
+        state.gen_params = alias.gen_params
+
+    # Persist as the new default in config
+    from dataclasses import replace
+
+    new_cfg = replace(ctx.config, default_model_alias=args)
+    ctx.config_manager.save(new_cfg)
+    ctx.config = new_cfg
+
+    return CommandResult(
+        message=f"Switched to '{args}'  ({alias.provider} / {alias.model_id})",
+        action="model_switched",
+    )
 
 
 async def _persona(

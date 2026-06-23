@@ -603,6 +603,13 @@ class AnythinkApp(App[int]):
                 sm.action_close()
                 return
 
+        # V4: Optimize panel
+        with contextlib.suppress(Exception):
+            op = self.query_one(OptimizePanel)
+            if op.is_open():
+                op.action_close()
+                return
+
         # Next: abort an in-progress generation
         if self._active_ai_bubble is not None and not self._stop_streaming:
             self._stop_streaming = True
@@ -719,6 +726,33 @@ class AnythinkApp(App[int]):
 
             with contextlib.suppress(Exception):
                 self.query_one(TipsBar).set_config(self._ctx.config)
+
+    def on_click(self, event: object) -> None:  # type: ignore[override]
+        """Redirect any click on a non-interactive area to the chat input.
+
+        Interactive overlay panels retain their own focus when open.
+        The Input widget stops its own click events, so this only fires
+        for clicks on read-only areas (conversation, HUD, side panels, etc.).
+        """
+        import contextlib
+
+        # Don't steal focus while an interactive overlay is visible
+        for panel_id in (
+            "settings-menu",
+            "optimize-panel",
+            "ratelimit-panel",
+            "plan-review-panel",
+            "phase-tracker-panel",
+            "microprompt",
+            "override-caution",
+        ):
+            with contextlib.suppress(Exception):
+                widget = self.query_one(f"#{panel_id}")
+                if widget.display:
+                    return
+
+        with contextlib.suppress(Exception):
+            self.query_one(Input).focus()
 
     def on_settings_menu_closed(self, event: SettingsMenu.Closed) -> None:
         """Return focus to the input after the settings overlay is dismissed."""
@@ -1399,6 +1433,14 @@ class AnythinkApp(App[int]):
                 )
             if result.message:
                 conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "model_switched":
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="success"))
+            if self._state is not None:
+                hud = self.query_one(HUDWidget)
+                hud.update_from_state(self._ctx, self._state)
             return
 
         if result.action == "debug_hud_update":

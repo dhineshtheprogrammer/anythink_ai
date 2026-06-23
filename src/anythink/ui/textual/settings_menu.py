@@ -210,11 +210,38 @@ class SettingsMenu(Widget):
             return "—"
         return str(val)
 
+    def _alias_choices(self) -> list[str]:
+        """Return the sorted list of configured model alias names."""
+        try:
+            return [a.alias for a in self._ctx.model_registry.list_all()]
+        except Exception:
+            return []
+
     def _adjust(self, direction: int) -> None:
         """Cycle enum choices (Left/Right) or nudge a float value."""
         _label, field, choices = _SETTINGS[self._index]
         cfg = self._ctx.config
         current = getattr(cfg, field, None)
+
+        # Special case: model alias cycles through configured aliases
+        if field == "default_model_alias":
+            alias_choices = self._alias_choices()
+            if not alias_choices:
+                return
+            current_str = str(current) if current else ""
+            try:
+                idx = alias_choices.index(current_str)
+            except ValueError:
+                idx = 0
+            new_val: Any = alias_choices[(idx + direction) % len(alias_choices)]
+            new_cfg = replace(cfg, default_model_alias=new_val)
+            self._ctx.config_manager.save(new_cfg)
+            self._ctx.config = new_cfg
+            rows = list(self.query(_SettingRow))
+            if self._index < len(rows):
+                rows[self._index].set_value(new_val)
+            self.post_message(self.Changed(field))
+            return
 
         if choices:
             current_str = self._current_value_str(field)
@@ -223,7 +250,7 @@ class SettingsMenu(Widget):
             except ValueError:
                 idx = 0
             new_str = choices[(idx + direction) % len(choices)]
-            new_val: Any = self._parse_value(field, new_str)
+            new_val = self._parse_value(field, new_str)
         elif isinstance(current, float):
             new_val = round(max(0.01, min(0.99, current + direction * 0.05)), 2)
         else:
