@@ -63,10 +63,12 @@ def test_main_when_configured_starts_chat() -> None:
     MockApp.return_value.run.assert_called_once()
 
 
-def test_setup_wizard_stub() -> None:
-    result = runner.invoke(app, ["setup"])
+def test_setup_wizard_already_configured_cancels() -> None:
+    with patch("anythink.cli.ConfigManager") as MockCM:
+        MockCM.return_value.is_configured.return_value = True
+        result = runner.invoke(app, ["setup"], input="\n")
     assert result.exit_code == 0
-    assert "wizard" in result.output.lower()
+    assert "cancelled" in result.output.lower()
 
 
 # ── keys list ─────────────────────────────────────────────────────────────────

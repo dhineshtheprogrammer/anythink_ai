@@ -25,6 +25,7 @@ from anythink.providers.base import (
 from anythink.search.base import SearchResult
 from anythink.session.models import Session
 from anythink.ui.banner import print_banner
+from anythink.ui.icons import VS15
 from anythink.ui.input import make_prompt_session
 from anythink.ui.renderer import StreamRenderer
 from anythink.ui.status import ContextStatusBar
@@ -257,7 +258,7 @@ class ChatApp:
                         if ratio >= 1.0:
                             ctx.console.print(
                                 Text(
-                                    f"  ⚠ Spend limit reached: "
+                                    f"  ⚠{VS15} Spend limit reached: "
                                     f"${current_spend:.4f} / ${limit:.2f} ({period})",
                                     style=ctx.theme.error,
                                 )
@@ -265,7 +266,7 @@ class ChatApp:
                         elif ratio >= 0.8:
                             ctx.console.print(
                                 Text(
-                                    f"  ⚠ Approaching spend limit: "
+                                    f"  ⚠{VS15} Approaching spend limit: "
                                     f"${current_spend:.4f} / ${limit:.2f} ({period})",
                                     style=ctx.theme.muted,
                                 )

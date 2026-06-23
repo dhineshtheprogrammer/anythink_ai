@@ -51,7 +51,18 @@ class AppConfig:
     debug_api_logging: bool = False
 
     VALID_THEMES: frozenset[str] = field(
-        default=frozenset({"midnight", "aurora", "ember", "arctic"}),
+        default=frozenset(
+            {
+                "midnight",
+                "aurora",
+                "ember",
+                "arctic",
+                "charcoal",
+                "linen",
+                "rose",
+                "dracula",
+            }
+        ),
         init=False,
         repr=False,
         compare=False,

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from anythink.exceptions import ConfigError
 
@@ -12,16 +12,18 @@ class Theme:
     """Color palette for the terminal UI."""
 
     name: str
-    primary: str  # main assistant-response text
-    secondary: str  # subtext, metadata
-    accent: str  # headers, highlights
-    muted: str  # dimmed / placeholder text
+    primary: str  # main assistant-response text / user bubble borders
+    secondary: str  # subtext, metadata, tagline
+    accent: str  # AI bubble borders, headers, highlights
+    muted: str  # dimmed / placeholder text / muted borders
     error: str  # error messages
     warning: str  # warning / orange-zone context bar
     success: str  # success messages, green-zone context bar
     info: str  # info / neutral semantic color
     background: str  # full-screen canvas tint (CSS hex, e.g. "#0a0a12")
     surface: str  # slightly lifted bubble/panel surface (CSS hex)
+    logo: str | None = field(default=None)  # logo color override; None → falls back to primary
+    is_light_bg: bool = field(default=False)  # True → Linen-style dark HUD bar treatment
 
 
 MIDNIGHT = Theme(
@@ -80,7 +82,67 @@ ARCTIC = Theme(
     surface="#0e1218",
 )
 
-THEMES: dict[str, Theme] = {t.name: t for t in (MIDNIGHT, AURORA, EMBER, ARCTIC)}
+CHARCOAL = Theme(
+    name="charcoal",
+    primary="#9EAAB5",
+    secondary="#5C9CF5",
+    accent="#5C9CF5",
+    muted="#6E6E6E",
+    error="#E06C75",
+    warning="#D4A847",
+    success="#6ABF69",
+    info="#7DB3E8",
+    background="#1E1E1E",
+    surface="#252525",
+    logo="#5C9CF5",
+)
+
+LINEN = Theme(
+    name="linen",
+    primary="#1E3A5F",
+    secondary="#0F6B6B",
+    accent="#0F6B6B",
+    muted="#8A8680",
+    error="#991B1B",
+    warning="#92400E",
+    success="#166534",
+    info="#1E40AF",
+    background="#F4F1EB",
+    surface="#EBE8E0",
+    is_light_bg=True,
+)
+
+ROSE = Theme(
+    name="rose",
+    primary="#E8A0B4",
+    secondary="#FF79A8",
+    accent="#FF79A8",
+    muted="#8A6070",
+    error="#FF4D6D",
+    warning="#F4C77A",
+    success="#7DC4A8",
+    info="#C084FC",
+    background="#1A0E12",
+    surface="#231318",
+)
+
+DRACULA = Theme(
+    name="dracula",
+    primary="#BD93F9",
+    secondary="#FF79C6",
+    accent="#FF79C6",
+    muted="#6272A4",
+    error="#FF5555",
+    warning="#F1FA8C",
+    success="#50FA7B",
+    info="#8BE9FD",
+    background="#282A36",
+    surface="#44475A",
+)
+
+THEMES: dict[str, Theme] = {
+    t.name: t for t in (MIDNIGHT, AURORA, EMBER, ARCTIC, CHARCOAL, LINEN, ROSE, DRACULA)
+}
 
 
 def get_theme(name: str) -> Theme:

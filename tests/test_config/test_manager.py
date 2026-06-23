@@ -74,6 +74,11 @@ class TestValidateConfig:
         assert len(errors) == 1
         assert "voice_model" in str(errors[0])
 
+    def test_new_themes_pass_validation(self) -> None:
+        for name in ("charcoal", "linen", "rose", "dracula"):
+            errors = validate_config({"active_theme": name})
+            assert errors == [], f"Theme '{name}' should be valid but got: {errors}"
+
 
 class TestConfigManager:
     def test_is_configured_false_when_no_file(self, config_manager: ConfigManager) -> None:

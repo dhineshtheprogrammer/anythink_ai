@@ -116,7 +116,18 @@ def _resolve_paths() -> Paths:
     )
 
 
-_VALID_THEMES = frozenset({"midnight", "aurora", "ember", "arctic"})
+_VALID_THEMES = frozenset(
+    {
+        "midnight",
+        "aurora",
+        "ember",
+        "arctic",
+        "charcoal",
+        "linen",
+        "rose",
+        "dracula",
+    }
+)
 
 # V2 enumerated config fields: field name -> allowed values.
 _ENUM_FIELDS: dict[str, frozenset[str]] = {

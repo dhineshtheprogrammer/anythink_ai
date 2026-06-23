@@ -8,12 +8,11 @@ from typing import TYPE_CHECKING
 from rich.text import Text
 from textual.widgets import Static
 
+from anythink.ui.icons import get_spinner_frames
 from anythink.ui.theme import Theme
 
 if TYPE_CHECKING:
     from textual.timer import Timer
-
-_SPINNER_FRAMES = ["◐", "◓", "◑", "◒"]
 
 _GENERIC_PHRASES = [
     "Thinking…",
@@ -52,6 +51,7 @@ class ThinkingWidget(Static):
         self._phrase_idx = 0
         self._context_phrase: str | None = None
         self._active = False
+        self._frames: list[str] = get_spinner_frames(None)
         self._spin_timer: Timer | None = None
         self._phrase_timer: Timer | None = None
 
@@ -89,7 +89,7 @@ class ThinkingWidget(Static):
     def _advance_spinner(self) -> None:
         if not self._active:
             return
-        self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
+        self._frame = (self._frame + 1) % len(self._frames)
         self._refresh_display()
 
     def _advance_phrase(self) -> None:
@@ -101,7 +101,7 @@ class ThinkingWidget(Static):
     def _refresh_display(self) -> None:
         t = self._theme
         phrase = self._context_phrase or _GENERIC_PHRASES[self._phrase_idx]
-        spinner = _SPINNER_FRAMES[self._frame]
+        spinner = self._frames[self._frame]
         line = Text()
         line.append(f" {spinner} ", style=t.accent)
         line.append(phrase, style=t.muted)

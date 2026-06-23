@@ -12,6 +12,8 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
 
+from anythink.ui.icons import VS15
+
 if TYPE_CHECKING:
     from anythink.app.context import AppContext
     from anythink.ui.theme import Theme
@@ -19,7 +21,11 @@ if TYPE_CHECKING:
 # (label, config_field, choices | None)  — None means free-text / numeric only
 _SETTINGS: list[tuple[str, str, list[str] | None]] = [
     # Appearance
-    ("Theme", "active_theme", ["midnight", "aurora", "ember", "arctic"]),
+    (
+        "Theme",
+        "active_theme",
+        ["midnight", "aurora", "ember", "arctic", "charcoal", "rose", "dracula", "linen"],
+    ),  # noqa: E501
     # V2.2: Visual identity
     ("Bubble style", "bubble_style", ["boxed", "minimal"]),
     ("Role avatars", "show_avatars", ["on", "off"]),
@@ -158,7 +164,7 @@ class SettingsMenu(Widget):
 
     def compose(self) -> ComposeResult:
         t = self._theme
-        yield Static(Text(" ⚙  Settings", style=t.primary))
+        yield Static(Text(f" ⚙{VS15}  Settings", style=t.primary))
         for i, (label, field, _choices) in enumerate(_SETTINGS):
             value = self._current_value_str(field)
             row = _SettingRow(label, value, t)

@@ -10,6 +10,7 @@ import typer
 from anythink import __version__
 from anythink.app.context import AppContext
 from anythink.config.manager import ConfigManager
+from anythink.ui.icons import VS15
 from anythink.ui.textual.app import AnythinkApp
 
 app = typer.Typer(
@@ -90,7 +91,152 @@ def main(
 @app.command("setup")
 def setup_wizard() -> None:
     """Run the interactive first-run setup wizard."""
-    typer.echo("Setup wizard coming in Phase 11.")
+    import asyncio
+
+    from anythink.config.models import ModelAlias, ModelRegistry
+    from anythink.config.schema import AppConfig
+    from anythink.exceptions import AnythinkError, KeychainError
+    from anythink.keys.manager import KeyManager
+    from anythink.providers.registry import ProviderRegistry
+
+    config_manager = ConfigManager()
+    paths = config_manager.paths
+
+    typer.echo("\nWelcome to Anythink Setup!")
+    typer.echo("─" * 40)
+    typer.echo("Configures your first AI provider and model.\n")
+
+    if config_manager.is_configured() and not typer.confirm(
+        "Anythink is already configured. Reconfigure?", default=False
+    ):
+        typer.echo("Cancelled.")
+        raise typer.Exit(0)
+
+    # ── Step 1: Provider ──────────────────────────────────────────────────────
+    pr = ProviderRegistry()
+    available = pr.list_names()
+    typer.echo("Step 1/4  Provider")
+    typer.echo(f"  Available: {', '.join(available)}")
+    provider_name: str = typer.prompt("  Provider")
+    if provider_name not in available:
+        typer.echo(f"  Warning: '{provider_name}' is not in the known list. Continuing anyway.")
+
+    # ── Step 2: API key ───────────────────────────────────────────────────────
+    km = KeyManager(paths=paths)
+    api_key: str | None = None
+
+    try:
+        probe = pr.instantiate(provider_name, api_key=None)
+        needs_key = probe.requires_api_key
+    except AnythinkError:
+        needs_key = True
+
+    typer.echo("\nStep 2/4  API Key")
+    if needs_key:
+        raw_key: str = typer.prompt(f"  Enter API key for '{provider_name}'", hide_input=True)
+        if not raw_key.strip():
+            typer.echo("  Error: API key cannot be empty.", err=True)
+            raise typer.Exit(1)
+        api_key = raw_key.strip()
+        try:
+            km.set_key(provider_name, api_key)
+            typer.echo("  ✓ API key saved.")
+        except KeychainError as exc:
+            typer.echo(f"  Error: {exc.user_message}", err=True)
+            raise typer.Exit(1) from None
+
+        if typer.confirm("  Test connection?", default=True):
+            typer.echo("  Connecting...", nl=False)
+            try:
+                ok = asyncio.run(pr.instantiate(provider_name, api_key=api_key).test_connection())
+                typer.echo(" ✓" if ok else " ✗ (connection failed — you can still continue)")
+            except AnythinkError as exc:
+                typer.echo(f" ✗ ({exc.user_message})")
+    else:
+        typer.echo(f"  '{provider_name}' does not require an API key. Skipping.")
+
+    # ── Step 3: Model ─────────────────────────────────────────────────────────
+    typer.echo("\nStep 3/4  Model")
+    model_id: str
+    context_window: int
+    supports_vision: bool
+
+    models = []
+    try:
+        typer.echo(f"  Fetching models from '{provider_name}'...", nl=False)
+        models = asyncio.run(pr.instantiate(provider_name, api_key=api_key).list_models())
+        typer.echo(f" {len(models)} found.")
+    except Exception:
+        typer.echo(" (could not fetch — enter model ID manually)")
+
+    if models:
+        for i, m in enumerate(models, 1):
+            label = m.display_name if m.display_name != m.id else m.id
+            typer.echo(f"  {i:>3}.  {label:<38} {m.context_window:>8,} tokens")
+        typer.echo(f"  {len(models) + 1:>3}.  Enter model ID manually")
+
+        raw_choice = typer.prompt(f"  Pick [1-{len(models) + 1}]")
+        try:
+            choice = int(raw_choice)
+        except ValueError:
+            choice = 0
+
+        if 1 <= choice <= len(models):
+            chosen = models[choice - 1]
+            model_id = chosen.id
+            context_window = chosen.context_window or 4096
+            supports_vision = chosen.supports_vision
+        else:
+            model_id = typer.prompt("  Model ID")
+            context_window = int(typer.prompt("  Context window (tokens)", default="4096"))
+            supports_vision = typer.confirm("  Supports image input?", default=False)
+    else:
+        model_id = typer.prompt("  Model ID")
+        context_window = int(typer.prompt("  Context window (tokens)", default="4096"))
+        supports_vision = typer.confirm("  Supports image input?", default=False)
+
+    default_alias = f"{provider_name}-{model_id.split('-')[0]}"
+    alias: str = typer.prompt("  Alias name for this model", default=default_alias)
+
+    model_registry = ModelRegistry(path=paths.models_file)
+    if model_registry.exists(alias):
+        typer.echo(f"  Alias '{alias}' already exists — overwriting.")
+        model_registry.remove(alias)
+    model_registry.add(
+        ModelAlias(
+            alias=alias,
+            provider=provider_name,
+            model_id=model_id,
+            context_window=context_window,
+            supports_vision=supports_vision,
+        )
+    )
+    typer.echo(f"  ✓ Model alias '{alias}' saved.")
+
+    # ── Step 4: Preferences ───────────────────────────────────────────────────
+    typer.echo("\nStep 4/4  Preferences")
+    _THEMES = ("midnight", "aurora", "ember", "arctic", "charcoal", "linen", "rose", "dracula")
+    theme = typer.prompt(f"  Theme ({'/'.join(_THEMES)})", default="midnight")
+    if theme not in _THEMES:
+        typer.echo(f"  Unknown theme '{theme}', using 'midnight'.")
+        theme = "midnight"
+
+    set_as_default = typer.confirm("  Set as default model?", default=True)
+
+    paths.ensure_dirs()
+    config_manager.save(
+        AppConfig(
+            active_theme=theme,
+            default_model_alias=alias if set_as_default else None,
+        )
+    )
+
+    typer.echo("\n✓ Setup complete!")
+    typer.echo(f"  Config : {paths.config_file}")
+    typer.echo(f"  Model  : {alias}  ({provider_name} / {model_id})")
+    typer.echo("  Run `anythink` to start chatting.")
+    if not set_as_default:
+        typer.echo(f"  Tip: use /model {alias} in-session to select your model.")
 
 
 # ── keys sub-commands ──────────────────────────────────────────────────────────
@@ -463,7 +609,7 @@ def cli_doctor() -> None:
         if r.category != current_category:
             current_category = r.category
             typer.echo(f"\n{r.category}")
-        icon = {"ok": "✓", "warn": "⚠", "fail": "✗"}.get(r.status, "?")
+        icon = {"ok": "✓", "warn": f"⚠{VS15}", "fail": "✗"}.get(r.status, "?")
         typer.echo(f"  {icon} {r.name}: {r.message}")
         if r.detail:
             typer.echo(f"    → {r.detail}")

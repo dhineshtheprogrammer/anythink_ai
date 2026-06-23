@@ -11,6 +11,8 @@ import json
 import textwrap
 from typing import TYPE_CHECKING, Any
 
+from anythink.ui.icons import VS15
+
 if TYPE_CHECKING:
     from anythink.debug.models import RequestDebugRecord
 
@@ -135,7 +137,7 @@ def format_stop_reason(record: RequestDebugRecord) -> str:
     if reason in ("max_tokens", "length"):
         lines += [
             "",
-            "⚠  The response was silently truncated.",
+            f"⚠{VS15}  The response was silently truncated.",
             "   Consider increasing max_tokens for this alias.",
         ]
     return _box(f"🔬 Stop Reason — Request #{record.request_id}", lines)
@@ -566,7 +568,7 @@ def format_validation_table(issues: list[Any]) -> str:
         "─" * 70,
     ]
     for issue in issues:
-        icon = {"ok": "✓", "warn": "⚠", "error": "❌"}.get(issue.severity, "?")
+        icon = {"ok": "✓", "warn": f"⚠{VS15}", "error": f"❌{VS15}"}.get(issue.severity, "?")
         lines.append(f"{icon:<6} {issue.category:<18} {issue.field:<22} {issue.message}")
         if issue.suggestion:
             lines.append(f"{'':6} {'':18} {'':22} → {issue.suggestion}")
@@ -575,6 +577,6 @@ def format_validation_table(issues: list[Any]) -> str:
     warn = sum(1 for i in issues if i.severity == "warn")
     err = sum(1 for i in issues if i.severity == "error")
     lines.append("─" * 70)
-    lines.append(f"✓ {ok}  ⚠ {warn}  ❌ {err}")
+    lines.append(f"✓ {ok}  ⚠{VS15} {warn}  ❌{VS15} {err}")
 
     return _box("🔬 Config Deep Validation", lines)

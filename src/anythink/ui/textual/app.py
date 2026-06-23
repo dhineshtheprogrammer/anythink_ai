@@ -28,8 +28,12 @@ from anythink.session.manager import auto_session_name
 from anythink.ui.banner import _BANNER
 from anythink.ui.bubbles import AIBubble, CompactNotice, LogoBubble, SystemBubble, UserBubble
 from anythink.ui.hud import HUDWidget
-from anythink.ui.icons import get_icon
-from anythink.ui.startup import find_resumable_session, is_returning_user
+from anythink.ui.icons import get_icon, patch_rich_cell_len
+from anythink.ui.startup import (
+    apply_icon_style_heuristic,
+    find_resumable_session,
+    is_returning_user,
+)
 from anythink.ui.textual.conversation import ConversationView
 from anythink.ui.textual.hint_bar import HintBar
 from anythink.ui.textual.input_area import InputArea
@@ -196,6 +200,8 @@ class AnythinkApp(App[int]):
 
     def on_mount(self) -> None:
         """Resolve state, populate HUD, show startup/resume UI, and focus input."""
+        patch_rich_cell_len()
+        apply_icon_style_heuristic(self._ctx)
         t = self._ctx.theme
         ia = self.query_one(InputArea)
         ia.styles.border_top = ("solid", resolve(t.muted))
@@ -637,7 +643,7 @@ class AnythinkApp(App[int]):
 
             new_theme = get_theme(self._ctx.config.active_theme)
             self._ctx.theme = new_theme
-            self.query_one(HUDWidget)._theme = new_theme
+            self.query_one(HUDWidget).refresh_theme(new_theme)
             # Update CSS variables and refresh screen background
             self.refresh_css()
             self._apply_theme_background(new_theme)
@@ -1785,7 +1791,8 @@ class AnythinkApp(App[int]):
             if tw:
                 _footer_parts.append(f"Total {tw:.0f}ms")
             if _footer_parts:
-                bubble.set_debug_footer("  ⏱ " + " · ".join(_footer_parts))
+                _timer = get_icon("timer", self._ctx.config)
+                bubble.set_debug_footer(f"  {_timer} " + " · ".join(_footer_parts))
 
     async def _rebuild_rag_index(self, index_name: str) -> None:
         """Background worker: rebuild a named RAG index."""
@@ -1838,7 +1845,8 @@ class AnythinkApp(App[int]):
 
         stdout_text = result.stdout.strip() or "(no output)"
         stderr_text = result.stderr.strip()
-        header = f"⚙️  {language} · exit {result.exit_code} · {result.duration_s:.3f}s"
+        _gear = get_icon("settings", self._ctx.config)
+        header = f"{_gear}  {language} · exit {result.exit_code} · {result.duration_s:.3f}s"
         body_parts = [header, f"stdout:\n{stdout_text}"]
         if stderr_text:
             body_parts.append(f"stderr:\n{stderr_text}")

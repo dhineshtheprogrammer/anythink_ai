@@ -109,6 +109,33 @@ class HUDWidget(Static):
         self.styles.border_bottom = ("solid", resolve(t.muted))
         self.app_version = self._version
         self.theme_name = t.name
+        self._apply_hud_background()
+
+    def _apply_hud_background(self) -> None:
+        """Apply dark background for light-background themes (Linen)."""
+        if self._theme.is_light_bg:
+            self.styles.background = "#2C2C2C"
+            self.styles.border_bottom = ("solid", "#484848")
+        else:
+            self.styles.background = "transparent"
+            self.styles.border_bottom = ("solid", resolve(self._theme.muted))
+
+    def refresh_theme(self, theme: Theme) -> None:
+        """Update the stored theme and re-apply HUD background and border."""
+        self._theme = theme
+        self._apply_hud_background()
+        self.theme_name = theme.name
+        self._refresh_hud()
+
+    def _hud_colors(self) -> tuple[str, str, str, str, str]:
+        """Return (primary, secondary, muted, accent, success) for HUD text rendering.
+
+        Overrides to light-on-dark values when a light-background theme is active.
+        """
+        t = self._theme
+        if t.is_light_bg:
+            return "#F4F1EB", "#F4F1EB", "#A09890", "#4AADAD", "#4AADAD"
+        return t.primary, t.secondary, t.muted, t.accent, t.success
 
     def on_resize(self, event: events.Resize) -> None:
         self._refresh_hud()
@@ -198,12 +225,12 @@ class HUDWidget(Static):
         return _Stub()  # type: ignore[return-value]
 
     def _line1(self, width: int = 100) -> Text:
-        t = self._theme
-        sep = Text("  │  ", style=t.muted)
+        hp, hs, hm, ha, _ = self._hud_colors()
+        sep = Text("  │  ", style=hm)
         line = Text()
 
-        line.append(" ✦ Anythink  ", style=t.primary)
-        line.append(f"v{self.app_version}", style=t.secondary)
+        line.append(" ✦ Anythink  ", style=hp)
+        line.append(f"v{self.app_version}", style=hs)
 
         if self.debug_active:
             line.append(f"  [DEBUG L{self.debug_level}]", style="bold red")
@@ -211,44 +238,45 @@ class HUDWidget(Static):
         line.append_text(sep)
 
         session_label = f'"{self.session_name}"' if self.session_name else "(no name)"
-        line.append("Session: ", style=t.muted)
-        line.append(session_label, style=t.secondary)
+        line.append("Session: ", style=hm)
+        line.append(session_label, style=hs)
         line.append_text(sep)
 
         if width >= 60:
-            line.append("Branch: ", style=t.muted)
-            line.append(self.branch, style=t.secondary)
+            line.append("Branch: ", style=hm)
+            line.append(self.branch, style=hs)
             line.append_text(sep)
 
         if width >= 80:
-            line.append("Theme: ", style=t.muted)
-            line.append(self.theme_name.capitalize(), style=t.secondary)
+            line.append("Theme: ", style=hm)
+            line.append(self.theme_name.capitalize(), style=hs)
 
         return line
 
     def _line2(self, width: int = 100) -> Text:
         t = self._theme
+        _hp, _hs, hm, ha, hss = self._hud_colors()
         cfg = self._cfg_stub()
-        sep = Text("  │  ", style=t.muted)
+        sep = Text("  │  ", style=hm)
         line = Text()
 
         bar_width = 16 if width >= 100 else (10 if width >= 80 else 6)
 
         if self.model_alias:
-            line.append("Model: ", style=t.muted)
-            line.append(self.model_alias, style=t.accent)
+            line.append("Model: ", style=hm)
+            line.append(self.model_alias, style=ha)
             line.append_text(sep)
 
         if self.provider_name:
             if width >= 80:
-                line.append("Provider: ", style=t.muted)
-                line.append(f"{self.provider_name} ", style=t.accent)
+                line.append("Provider: ", style=hm)
+                line.append(f"{self.provider_name} ", style=ha)
             dot = get_icon("dot", cfg)
-            line.append(dot, style=t.success)
+            line.append(dot, style=hss)
             line.append_text(sep)
 
         if self.context_window > 0:
-            line.append("Context: ", style=t.muted)
+            line.append("Context: ", style=hm)
             line.append_text(
                 _context_bar(
                     t,
@@ -264,28 +292,28 @@ class HUDWidget(Static):
             line.append_text(sep)
 
         search_icon = get_icon("search", cfg)
-        search_style = t.success if self.search_enabled else t.muted
+        search_style = hss if self.search_enabled else hm
         if width >= 60:
-            line.append(f"{search_icon} Search: ", style=t.muted)
+            line.append(f"{search_icon} Search: ", style=hm)
             search_label = "ON" if self.search_enabled else "OFF"
         else:
-            line.append(f"{search_icon} ", style=t.muted)
+            line.append(f"{search_icon} ", style=hm)
             search_label = "ON" if self.search_enabled else "—"
         line.append(search_label, style=search_style)
         line.append_text(sep)
 
         rag_icon = get_icon("rag", cfg)
-        rag_style = t.success if self.rag_index else t.muted
+        rag_style = hss if self.rag_index else hm
         rag_label = self.rag_index if self.rag_index else "—"
         if width >= 60:
-            line.append(f"{rag_icon} RAG: ", style=t.muted)
+            line.append(f"{rag_icon} RAG: ", style=hm)
         else:
-            line.append(f"{rag_icon} ", style=t.muted)
+            line.append(f"{rag_icon} ", style=hm)
         line.append(rag_label, style=rag_style)
 
         if self.session_cost > 0:
             line.append_text(sep)
-            line.append("~$", style=t.muted)
-            line.append(f"{self.session_cost:.4f}", style=t.muted)
+            line.append("~$", style=hm)
+            line.append(f"{self.session_cost:.4f}", style=hm)
 
         return line

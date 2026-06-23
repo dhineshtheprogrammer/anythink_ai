@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING
 
 from anythink import __version__
@@ -63,3 +64,32 @@ def startup_one_liner(ctx: AppContext) -> str:
         f"  ·  {ctx_size} ctx"
         "  ·  Type /help for commands"
     )
+
+
+def terminal_supports_unicode() -> bool:
+    """Return False for known-ASCII terminals; True otherwise."""
+    term = os.environ.get("TERM", "")
+    if term in ("dumb", "vt100"):
+        return False
+    lang = os.environ.get("LC_ALL") or os.environ.get("LANG") or ""
+    if lang and "UTF" not in lang.upper():
+        return False
+    if os.environ.get("WT_SESSION"):
+        return True
+    if os.environ.get("TERM_PROGRAM") in ("iTerm.app", "WezTerm", "Hyper", "vscode"):
+        return True
+    if os.environ.get("COLORTERM") in ("truecolor", "24bit"):
+        return True
+    if os.environ.get("VTE_VERSION"):
+        return True
+    return True
+
+
+def apply_icon_style_heuristic(ctx: AppContext) -> None:
+    """Auto-downgrade icon_style to ascii for terminals that can't render Unicode."""
+    if ctx.config.icon_style == "ascii":
+        return
+    if not terminal_supports_unicode():
+        from dataclasses import replace as _replace
+
+        ctx.config = _replace(ctx.config, icon_style="ascii")

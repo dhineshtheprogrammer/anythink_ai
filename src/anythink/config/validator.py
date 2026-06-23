@@ -275,7 +275,16 @@ class ConfigValidator:
     def _check_theme_completeness(self, ctx: AppContext) -> list[ValidationIssue]:
         issues: list[ValidationIssue] = []
         config = ctx.config
-        valid_themes = {"midnight", "aurora", "ember", "arctic"}
+        valid_themes = {
+            "midnight",
+            "aurora",
+            "ember",
+            "arctic",
+            "charcoal",
+            "linen",
+            "rose",
+            "dracula",
+        }
         if config.active_theme in valid_themes:
             issues.append(
                 ValidationIssue(

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Anythink 3.0 is a universal AI terminal workstation (`pip install anythink`) built in Python 3.11+. It provides a full-featured TUI powered by **Textual**, with LLM providers, session management, slash commands, RAG, agentic tools (exec, browse, MCP), voice input, desktop notifications, a 4-panel dashboard, a plugin system, and a full V3 automation layer (spend tracking, templates, comparison, export, scheduling, batch processing, diagnostics, self-update, config backup).
+Anythink is a universal AI terminal workstation (`pip install anythink`) built in Python 3.11+. It provides a full-featured TUI powered by **Textual**, with LLM providers, session management, slash commands, RAG, agentic tools (exec, browse, MCP), voice input, desktop notifications, a 4-panel dashboard, a plugin system, a full V3 automation layer (spend tracking, templates, comparison, export, scheduling, batch processing, diagnostics, self-update, config backup), and a V3.2 debug mode system for deep request inspection.
 
 ## Commands
 
@@ -16,6 +16,7 @@ pip install -e ".[all,dev]"   # includes sentence-transformers, whisper, playwri
 # Run the CLI
 anythink                     # start chat (simple mode)
 anythink --dashboard         # start in 4-panel Dashboard mode
+anythink --debug             # start with debug mode pre-enabled
 anythink --version
 
 anythink keys list|add|show|update|delete|test
@@ -56,7 +57,7 @@ Coverage minimum is 80% (`--cov-fail-under=80`). `ui/input.py`, `ui/textual/app.
 
 `app/context.py:AppContext` is the single DI container constructed once at startup and threaded through the entire call stack. Every subsystem lives here — no module-level globals exist. Tests inject `Console(file=StringIO())` through this container.
 
-Key fields: `config`, `paths`, `theme`, `key_manager`, `provider_registry`, `model_registry`, `persona_manager`, `session_manager`, `search_registry`, `plugin_manager`, `rag_manager`, `embedding_registry`, `tool_runner`, `mcp_manager`, `notifier`, `spend_tracker`, `template_manager`, `schedule_manager`.
+Key fields: `config`, `paths`, `theme`, `key_manager`, `provider_registry`, `model_registry`, `persona_manager`, `session_manager`, `search_registry`, `plugin_manager`, `rag_manager`, `embedding_registry`, `tool_runner`, `mcp_manager`, `notifier`, `spend_tracker`, `template_manager`, `schedule_manager`, `debug_manager`.
 
 **Mutating frozen config at runtime** — `AppConfig` is frozen; use `dataclasses.replace` and reassign `ctx.config`:
 ```python
@@ -117,6 +118,10 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 | `"template_send"` | Injects `extra["rendered"]` into the Input widget for editing before send |
 | `"update_confirm"` | Sets `_pending_update = True`; user types `y` to run upgrade in background thread |
 | `"schedule_run"` | Fires `_run_schedule(extra["schedule_name"])` worker immediately |
+| `"debug_display"` | Renders formatted debug output in an overlay; content in `extra["content"]` |
+| `"debug_panel_toggle"` | Shows/hides the `DebugPanel` right-side widget |
+| `"debug_hud_update"` | Refreshes the HUD debug indicator (`[DEBUG L2]`) |
+| `"replay_stream"` | Replays a stored `RequestDebugRecord` through a provider; params in `extra` |
 
 ### Textual TUI shell
 
@@ -125,9 +130,11 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 **Interactive mode state flags** (checked in order in `on_input_area_submitted`):
 `_pending_resume` → `_naming_mode` → `_pending_undo` → `_pending_branch_create` → `_pending_exec_data` → `_pending_browse_data` → `_pending_mcp_data` → `_pending_voice` → `_pending_clear` → `_pending_compare_pick` → `_pending_update`
 
+**Debug panel** — `DebugPanel` is a right-side widget composed into the layout at startup and hidden by default. It is toggled via `_dispatch_command` when action is `"debug_panel_toggle"`. The HUD permanently shows `[DEBUG L2]` (or the active level) whenever `debug_manager.is_active()` is true.
+
 **V3 compare flow**: `/compare alias1 alias2` sets `_pending_compare_aliases`; the user's next message is intercepted (before normal chat), fires `_run_comparison` worker, which calls `compare/runner.py` and renders results sequentially. Pick prompt captured by `_pending_compare_pick` → `_handle_compare_pick()`.
 
-**Background workers** fire for every long-running operation (`_stream_response`, `_run_exec_tool`, `_run_browse_tool`, `_run_mcp_tool`, `_rebuild_rag_index`, `_finish_voice_recording`, `_reload_conversation`, `_run_comparison`, `_run_schedule`). Each worker appends its result to `state.history` and optionally calls `_ctx.notifier.notify(...)`.
+**Background workers** fire for every long-running operation (`_stream_response`, `_run_exec_tool`, `_run_browse_tool`, `_run_mcp_tool`, `_rebuild_rag_index`, `_finish_voice_recording`, `_reload_conversation`, `_run_comparison`, `_run_schedule`, `_replay_debug_stream`). Each worker appends its result to `state.history` and optionally calls `_ctx.notifier.notify(...)`.
 
 **Priority bindings** (`priority=True`) on `Ctrl+D/L/R` override the inner `Input` widget's own key handling.
 
@@ -181,6 +188,19 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 
 **Config backup** — `config/backup.py:export_config()` bundles config, models, personas, templates, schedules as JSON (keys excluded). `import_config()` validates the config section via `validate_config()` before writing, and creates an automatic safety snapshot first.
 
+**Debug mode (V3.2)** — `debug/manager.py:DebugManager` is always present in `AppContext` but zero-cost when inactive. Enabled via `anythink --debug` or `/debug on`. Three verbosity levels (`debug_level` 1–3). Stores up to 100 `RequestDebugRecord` objects in an in-memory deque. Every instrumentation call in `_stream_response()` is guarded by `is_active()`.
+
+`RequestDebugRecord` (`debug/models.py`) captures the full request lifecycle: monotonic timestamps for prompt assembly / RAG / search / API overhead / TTFT / streaming / rendering; token usage + tokens-per-second; stop reason; RAG query and scored retrieval results; tool call traces; plugin hook events; HTTP request/response logs (auth headers masked); and token-by-token stream trace (level 3 only).
+
+`debug/commands.py` registers all subcommands under the `/debug` namespace:
+- **Mode**: `on`, `off`, `toggle`, `level <1|2|3>`, `api` (toggle raw HTTP capture)
+- **Request inspection**: `prompt [n]`, `timing [n]`, `stopreason`, `tokens`, `tps`, `context`, `diff [n1 n2]`
+- **RAG**: `chunks`, `embeddings`, `raginject`
+- **Tools/agent**: `tools`, `agent`, `tooldiff [n1 n2]`, `plugins`
+- **Advanced**: `replay [n] [--provider alias]`, `latency`, `compare <alias...>`, `perf`, `export [--format txt|json]`, `panel`
+
+`debug/http_logger.py` captures raw HTTP traffic via httpx event hooks and writes a rolling log (max 50 MB) to `$XDG_STATE_HOME/anythink/logs/api_debug.log`. `debug/formatters.py` contains pure Rich Text formatters for all inspection subcommands (no side effects).
+
 ### Config & storage (XDG)
 
 | File/Dir | Location |
@@ -195,10 +215,14 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 | Spend log (V3) | `$XDG_DATA_HOME/anythink/spend.yaml` |
 | RAG index metadata | `$XDG_DATA_HOME/anythink/rag/` |
 | RAG vector stores | `$XDG_CACHE_HOME/anythink/rag/` |
+| Debug exports (V3.2) | `$XDG_DATA_HOME/anythink/debug_exports/` |
+| API debug log (V3.2) | `$XDG_STATE_HOME/anythink/logs/api_debug.log` |
 
 `AppConfig` (`config/schema.py`) is frozen. `validate_config()` in `config/manager.py` checks enum fields (`ui_mode`, `browse_mode`, `exec_mode`, `voice_model`, `spend_budget_period`, etc.) and returns a list of `ConfigError`s. Valid themes: `midnight`, `aurora`, `ember`, `arctic`.
 
 **V3 AppConfig fields**: `spend_tracking` (bool, default `True`), `spend_budget_soft_limit` (float | None), `spend_budget_period` (`"monthly"` | `"daily"`).
+
+**V3.2 AppConfig fields**: `debug_mode` (bool, default `False`), `debug_level` (int, default `2`, clamped 1–3), `debug_api_logging` (bool, default `False`).
 
 ### Exception hierarchy
 
@@ -211,9 +235,21 @@ AnythinkError (message + user_message)
   RAGError / ToolExecutionError / BrowseError / MCPError / VoiceError
   BranchError / NotificationError
   SpendError / ExportError / ScheduleError / BatchError / UpdateError  ← V3
+  DebugError  ← V3.2
 ```
 
 Always raise the most specific subclass. `user_message` is what the terminal shows.
+
+### TUI widget components
+
+Supporting widgets in `ui/textual/` beyond the main app shell:
+
+- `thinking_widget.py:ThinkingWidget` — Animated spinner (`◐◓◑◒`) with rotating contextual phrases shown during generation; `set_context()` overrides the phrase set.
+- `tips_bar.py:TipsBar` — Rotating educational tips shown above the input area during streaming; hidden at rest.
+- `hint_bar.py:HintBar` — Persistent keyboard shortcut reference bar below the input; switches between "streaming" and "resting" hint sets.
+- `slash_menu.py:SlashMenu` — Drop-up autocomplete for slash commands with arrow-key navigation and keyword matching.
+- `settings_menu.py:SettingsMenu` — Interactive arrow-key-navigable overlay for live visual settings (`/settings`). Each `_SettingRow` change instantly re-renders all existing messages via `BubbleStyle.retroactive_apply()`.
+- `theme_bridge.py:ThemeBridge` — Maps Rich named colors to CSS hex values for Textual widgets; exports `theme_css_vars()`.
 
 ### Testing conventions
 
@@ -222,3 +258,4 @@ Always raise the most specific subclass. `user_message` is what the terminal sho
 - **Textual Pilot tests** — `async with app.run_test(headless=True) as pilot`. Mock contexts must set `ctx.rag_manager.is_active = False` and `ctx.mcp_manager.list_servers.return_value = []` to prevent `StatsPanel.update_stats` format errors.
 - **Optional-dep tests** — use `patch.dict(sys.modules, {"sounddevice": None})` to simulate missing packages.
 - **`asyncio_mode = "auto"`** — all `async def` test functions run automatically; no `@pytest.mark.asyncio` needed.
+- **Debug tests** — `tests/test_debug_manager.py`, `test_debug_models.py`, `test_debug_formatters.py`, `test_debug_commands.py` cover the V3.2 debug layer. Formatters are pure functions and tested without TUI. Use a factory to build mock `RequestDebugRecord` objects rather than constructing them inline.
