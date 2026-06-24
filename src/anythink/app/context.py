@@ -35,6 +35,8 @@ from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
 from anythink.rag.manager import RAGManager
 from anythink.schedule.manager import ScheduleManager
+from anythink.search.cache import SearchCache
+from anythink.search.orchestrator import SearchOrchestrator
 from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
 from anythink.spend.tracker import SpendTracker
@@ -63,6 +65,8 @@ class AppContext:
     persona_manager: PersonaManager
     session_manager: SessionManager
     search_registry: SearchRegistry
+    search_cache: SearchCache
+    search_orchestrator: SearchOrchestrator
     plugin_manager: PluginManager
     rag_manager: RAGManager
     embedding_registry: EmbeddingRegistry
@@ -111,7 +115,20 @@ class AppContext:
 
         session_manager = SessionManager(sessions_dir=resolved.sessions_dir)
         search_reg = SearchRegistry.from_entry_points(
-            api_keys={"serpapi": key_manager.get_key("serpapi")}
+            api_keys={
+                "serpapi": key_manager.get_key("serpapi"),
+                "exa": key_manager.get_key("exa"),
+                "newsapi": key_manager.get_key("newsapi"),
+                "bing": key_manager.get_key("bing"),
+                "google_cse": key_manager.get_key("google_cse"),
+            }
+        )
+        search_cache = SearchCache(ttl_minutes=config.search_cache_ttl_minutes)
+        search_orchestrator = SearchOrchestrator(
+            search_reg,
+            search_cache,
+            preferred_backend=config.search_provider,
+            max_searches=config.search_max_per_response,
         )
         emb = EmbeddingRegistry.from_entry_points().get_available(config.embedding_backend)
         mcp_manager = MCPManager(
@@ -184,6 +201,8 @@ class AppContext:
             persona_manager=PersonaManager(path=resolved.personas_file),
             session_manager=session_manager,
             search_registry=search_reg,
+            search_cache=search_cache,
+            search_orchestrator=search_orchestrator,
             plugin_manager=PluginManager(),
             rag_manager=rag_manager,
             embedding_registry=embedding_registry,

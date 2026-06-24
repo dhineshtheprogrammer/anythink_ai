@@ -49,6 +49,10 @@ class ChatState:
     tokens_estimated: bool = False  # True when token count is client-side estimate
     gen_params: GenerationParams | None = None  # V3: active generation params
 
+    # ── Enhanced Web Search session state ─────────────────────────────────
+    search_mode: str = "general"  # "general" | "news"
+    _search_rag_conflict_acked: bool = False
+
     # ── Phase 3: conversation branching ───────────────────────────────────
     active_branch: str = "main"
     # Branch name → message list (shares reference with `history` for "main")

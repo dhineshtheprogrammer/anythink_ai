@@ -62,6 +62,21 @@ class AppConfig:
     rag_confidence_display: bool = True  # show per-chunk relevance in expanded view
     rag_no_match_behavior: str = "graceful"  # "graceful" (3-option menu) | "passthrough" (ignore RAG)
 
+    # --- Enhanced Web Search fields ---
+    search_default_enabled: bool = False  # global default; per-session toggle lives in ChatState
+    search_mode: str = "general"  # "general" | "news"
+    search_max_per_response: int = 5
+    search_query_rewrite: bool = True
+    search_preview: bool = True
+    search_preview_delay_s: float = 3.0
+    search_cache_enabled: bool = True
+    search_cache_ttl_minutes: int = 30
+    search_safe_search: str = "moderate"  # "strict" | "moderate" | "off"
+    search_freshness: str | None = None  # "24h"|"7d"|"30d"|"3m"|"YYYY-MM-DD" or None
+    search_include_domains: tuple[str, ...] = field(default_factory=tuple)
+    search_exclude_domains: tuple[str, ...] = field(default_factory=tuple)
+    search_max_page_chars: int = 15_000
+
     # --- V4 MMOS fields (mmos_enabled=False preserves pure V3 behaviour) ---
     mmos_enabled: bool = False
     mmos_mode: str = "auto"  # "online" | "offline" | "auto"

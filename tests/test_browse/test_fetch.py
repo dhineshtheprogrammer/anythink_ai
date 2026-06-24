@@ -49,26 +49,35 @@ class TestBrowseFetcherSnippets:
 
         assert pairs == [("Example", "An example page.")]
 
-    async def test_returns_empty_when_no_registry(self) -> None:
-        fetcher = BrowseFetcher(search_registry=None)
-        assert await fetcher.fetch_snippets("query") == []
+    async def test_raises_search_error_when_no_registry(self) -> None:
+        from anythink.exceptions import SearchError
 
-    async def test_returns_empty_when_no_backend(self) -> None:
+        fetcher = BrowseFetcher(search_registry=None)
+        with pytest.raises(SearchError, match="No search registry"):
+            await fetcher.fetch_snippets("query")
+
+    async def test_raises_search_error_when_no_backend(self) -> None:
+        from anythink.exceptions import SearchError
+
         mock_registry = MagicMock()
         mock_registry.get_available = MagicMock(return_value=None)
 
         fetcher = BrowseFetcher(search_registry=mock_registry)
-        assert await fetcher.fetch_snippets("query") == []
+        with pytest.raises(SearchError, match="No search backend"):
+            await fetcher.fetch_snippets("query")
 
-    async def test_returns_empty_on_search_exception(self) -> None:
+    async def test_propagates_search_exception(self) -> None:
+        from anythink.exceptions import SearchError
+
         mock_backend = AsyncMock()
-        mock_backend.search = AsyncMock(side_effect=Exception("network error"))
+        mock_backend.search = AsyncMock(side_effect=SearchError("network error"))
 
         mock_registry = MagicMock()
         mock_registry.get_available = MagicMock(return_value=mock_backend)
 
         fetcher = BrowseFetcher(search_registry=mock_registry)
-        assert await fetcher.fetch_snippets("query") == []
+        with pytest.raises(SearchError, match="network error"):
+            await fetcher.fetch_snippets("query")
 
 
 class TestBrowseToolAvailability:
