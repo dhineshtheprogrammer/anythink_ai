@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from anythink.config.schema import AppConfig
     from anythink.optimize.models import TurnMMOSMetadata
     from anythink.rag.models import RetrievalResult
+    from anythink.rag.quality import RetrievalQuality
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -176,6 +177,7 @@ class AIBubble(Static):
         self._length_suffix = ""
         self._is_bookmarked = is_bookmarked
         self._retrieval_results: list[RetrievalResult] = []
+        self._retrieval_quality: RetrievalQuality | None = None
         self._debug_footer: str = ""
         # Initial streaming placeholder
         super().__init__(Text("▍", style=theme.muted))
@@ -235,6 +237,18 @@ class AIBubble(Static):
 
     def set_retrieval_results(self, results: list[RetrievalResult]) -> None:
         """Attach retrieval sources and refresh the bubble footer."""
+        self._retrieval_results = results
+        if self._buffer:
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
+            self._redraw(body)
+
+    def set_rag_quality(
+        self,
+        quality: RetrievalQuality,
+        results: list[RetrievalResult],
+    ) -> None:
+        """Attach retrieval quality + sources; render the enhanced quality footer."""
+        self._retrieval_quality = quality
         self._retrieval_results = results
         if self._buffer:
             body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
@@ -307,8 +321,18 @@ class AIBubble(Static):
         if self._retrieval_results:
             n = len(self._retrieval_results)
             icon = get_icon("rag_footer", cfg)
-            s = "s" if n != 1 else ""
-            extra_parts.append(Text(f"\n{icon} Retrieved from {n} source{s}", style=t.muted))
+            if self._retrieval_quality is not None:
+                q = self._retrieval_quality
+                from anythink.rag.quality import TIER_STYLE
+                tier_color = getattr(t, TIER_STYLE.get(q.tier, "muted"), t.muted)
+                footer_text = Text()
+                footer_text.append(f"\n{icon} {n} source{'s' if n != 1 else ''}  ·  ", style=t.muted)
+                footer_text.append(f"Confidence: {q.confidence:.0%}  ·  ", style=t.muted)
+                footer_text.append(f"[{q.tier_label}]", style=tier_color)
+                extra_parts.append(footer_text)
+            else:
+                s = "s" if n != 1 else ""
+                extra_parts.append(Text(f"\n{icon} Retrieved from {n} source{s}", style=t.muted))
         if self._debug_footer:
             extra_parts.append(Text(f"\n{self._debug_footer}", style=t.muted))
 

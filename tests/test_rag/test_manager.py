@@ -103,8 +103,8 @@ class TestBuildIndex:
             )
         )
         await mgr.build_index("persist-test", backend)
-        store_path = mgr._store_path("persist-test")
-        assert store_path.exists()
+        from anythink.rag.backends.registry import store_exists
+        assert store_exists("pure", mgr._store_base_path("persist-test"))
 
     async def test_build_nonexistent_raises(
         self, mgr: RAGManager, backend: MockEmbeddingBackend

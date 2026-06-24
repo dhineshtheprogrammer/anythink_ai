@@ -76,6 +76,10 @@ class TestHUDWidgetUnit:
         hud = HUDWidget(MIDNIGHT, "2.0.0")
         assert hud.rag_index == ""
 
+    def test_reactive_rag_embedding_empty_by_default(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "2.0.0")
+        assert hud.rag_embedding == ""
+
 
 # ── HUD integration tests (Textual Pilot) ────────────────────────────────────
 
@@ -133,6 +137,56 @@ def _make_state(model_id: str = "gpt-4o") -> ChatState:
         context_window=8192,
         search_enabled=False,
     )
+
+
+class TestHUDLine2RagEmbedding:
+    """Unit tests for _line2() RAG embedding model display (Phase 8)."""
+
+    def test_no_embedding_shown_when_rag_inactive(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.rag_index = ""
+        hud.rag_embedding = "local"
+        line = hud._line2(100)
+        assert "·" not in line.plain or "local" not in line.plain
+
+    def test_embedding_shown_when_rag_active(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.rag_index = "my-docs"
+        hud.rag_embedding = "local"
+        line = hud._line2(100)
+        assert "local" in line.plain
+
+    def test_embedding_model_separator_present_when_active(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.rag_index = "my-docs"
+        hud.rag_embedding = "ollama"
+        line = hud._line2(100)
+        assert "·" in line.plain
+        assert "ollama" in line.plain
+
+    def test_embedding_not_shown_when_empty(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.rag_index = "my-docs"
+        hud.rag_embedding = ""
+        line = hud._line2(100)
+        # Separator for embedding should not appear since rag_embedding is empty
+        text = line.plain
+        # Count occurrences of "·": only the existing separators, not embedding one
+        assert "·" not in text.split("RAG:")[-1] if "RAG:" in text else True
+
+    def test_embedding_truncated_on_narrow_screen(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.rag_index = "my-docs"
+        hud.rag_embedding = "openai-emb/text-embedding-3-large"
+        line = hud._line2(80)  # narrow — triggers 14-char truncation
+        assert "openai-emb/tex" in line.plain  # first 14 chars
+
+    def test_embedding_not_truncated_on_wide_screen(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.rag_index = "my-docs"
+        hud.rag_embedding = "openai-emb/text-embedding-3-large"
+        line = hud._line2(100)
+        assert "openai-emb/text-embedding-3-large" in line.plain
 
 
 @pytest.mark.asyncio

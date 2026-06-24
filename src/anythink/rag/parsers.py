@@ -504,6 +504,69 @@ def parse_yaml_file(path: Path) -> list[tuple[str, dict[str, Any]]]:
     return sections if sections else parse_text(path)
 
 
+# ── URL (HTTP/HTTPS) ──────────────────────────────────────────────────────────
+
+
+def parse_url(url: str) -> list[tuple[str, dict[str, Any]]]:
+    """Fetch an HTTP/HTTPS URL and return its text content as a single unit.
+
+    Uses httpx (already a core dependency).  HTML is stripped to plain text via
+    a lightweight regex approach so heavy deps (BeautifulSoup, lxml) are not needed.
+    Raises RAGError if the URL cannot be fetched or returns non-200 status.
+    """
+    import re as _re
+
+    try:
+        import httpx
+    except ImportError as exc:
+        raise RAGError(
+            "httpx not installed.",
+            user_message="URL fetching requires httpx (it is a core anythink dependency).",
+        ) from exc
+
+    try:
+        resp = httpx.get(url, timeout=30.0, follow_redirects=True)
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise RAGError(
+            f"HTTP {exc.response.status_code} fetching {url}",
+            user_message=f"Failed to fetch URL (HTTP {exc.response.status_code}): {url}",
+        ) from exc
+    except Exception as exc:
+        raise RAGError(
+            f"Cannot fetch {url}: {exc}",
+            user_message=f"Failed to fetch URL: {url}",
+        ) from exc
+
+    raw_html = resp.text
+
+    # Extract <title>
+    title_m = _re.search(r"<title[^>]*>(.*?)</title>", raw_html, _re.I | _re.S)
+    page_title = title_m.group(1).strip() if title_m else url
+
+    # Strip <script> / <style> blocks first
+    no_scripts = _re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", raw_html, flags=_re.I | _re.S)
+    # Strip remaining HTML tags
+    plain = _re.sub(r"<[^>]+>", " ", no_scripts)
+    # Decode common HTML entities
+    for entity, char in (
+        ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
+        ("&quot;", '"'), ("&#39;", "'"), ("&nbsp;", " "),
+    ):
+        plain = plain.replace(entity, char)
+
+    text = _preprocess(plain)
+
+    meta: dict[str, Any] = {
+        "source_path": url,
+        "file_type": "url",
+        "file_modified_at": 0.0,
+        "source_url": url,
+        "page_title": page_title,
+    }
+    return [(text, meta)] if text else []
+
+
 # ── Dispatch table ────────────────────────────────────────────────────────────
 
 _GENERIC_CODE_EXTS = frozenset(
@@ -537,3 +600,8 @@ def dispatch_parser(path: Path) -> list[tuple[str, dict[str, Any]]]:
     """Select and run the appropriate parser for *path* based on its extension."""
     parser = _PARSER_MAP.get(path.suffix.lower(), parse_text)
     return parser(path)
+
+
+def is_url(s: str) -> bool:
+    """Return True if *s* looks like an HTTP/HTTPS URL."""
+    return s.startswith(("http://", "https://"))

@@ -55,8 +55,12 @@ class AppConfig:
     rag_top_k: int = 3  # chunks retrieved per query (default)
     rag_reranking: bool = False  # cross-encoder re-ranking on/off
     rag_retrieval_strategy: str = "vector"  # "vector"|"bm25"|"hybrid"|"mmr"
+    rag_chunk_strategy: str = "fixed"  # session-level override; per-index stored in IndexInfo
+    rag_chunk_size: int = 512  # tokens per chunk (session-level default)
+    rag_chunk_overlap: int = 100  # overlap tokens (session-level default)
     rag_quality_indicators: bool = True  # show confidence scores in response footer
     rag_confidence_display: bool = True  # show per-chunk relevance in expanded view
+    rag_no_match_behavior: str = "graceful"  # "graceful" (3-option menu) | "passthrough" (ignore RAG)
 
     # --- V4 MMOS fields (mmos_enabled=False preserves pure V3 behaviour) ---
     mmos_enabled: bool = False

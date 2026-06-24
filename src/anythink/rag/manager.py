@@ -11,12 +11,12 @@ from anythink.exceptions import RAGError
 from anythink.rag.bm25 import BM25Index
 from anythink.rag.chunkers import chunk_file
 from anythink.rag.models import IndexInfo, RetrievalResult
-from anythink.rag.store import VectorStore
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from anythink.embeddings.base import BaseEmbeddingBackend
+    from anythink.rag.backends.base import BaseVectorStore
 
 # Extensions to index for "project" (code) type indexes
 _PROJECT_EXTS = frozenset(
@@ -50,17 +50,17 @@ _ALL_EXTS = _PROJECT_EXTS | _DOC_EXTS
 
 
 class RAGManager:
-    """Manages named RAG indexes: metadata in YAML, stores as gzip JSON.
+    """Manages named RAG indexes: metadata in YAML, vector stores via backend registry.
 
     ``rag_dir``   — stores ``{name}.yaml`` index metadata files
-    ``cache_dir`` — stores ``{name}.store.gz`` persisted vector stores
+    ``cache_dir`` — stores backend-specific vector store files
     """
 
     def __init__(self, rag_dir: Path, cache_dir: Path) -> None:
         self._rag_dir = rag_dir
         self._cache_dir = cache_dir
         self._active_info: IndexInfo | None = None
-        self._active_store: VectorStore | None = None
+        self._active_store: BaseVectorStore | None = None
         self._active_bm25: BM25Index | None = None
         self._last_results: list[RetrievalResult] = []
 
@@ -73,6 +73,13 @@ class RAGManager:
     @property
     def active_name(self) -> str | None:
         return self._active_info.name if self._active_info else None
+
+    @property
+    def active_embedding_model(self) -> str:
+        """Short embedding backend name of the active index, or '' when inactive."""
+        if self._active_info is None:
+            return ""
+        return self._active_info.embedding_backend
 
     # ── index management ───────────────────────────────────────────────────
 
@@ -116,9 +123,18 @@ class RAGManager:
                 f"Index '{name}' not found.",
                 user_message=f"No RAG index named '{name}'.",
             )
+        info = self.get_info(name)
         meta.unlink(missing_ok=True)
-        self._store_path(name).unlink(missing_ok=True)
+
+        # Delete backend-specific files
+        if info:
+            self._delete_backend_files(name, info.vector_backend)
+        else:
+            # Fallback: try legacy pure store path
+            self._legacy_store_path(name).unlink(missing_ok=True)
+
         self._bm25_path(name).unlink(missing_ok=True)
+
         if self._active_info and self._active_info.name == name:
             self._active_info = None
             self._active_store = None
@@ -141,16 +157,20 @@ class RAGManager:
         info = self.get_info(old_name)
         if info is None:
             raise RAGError(f"Could not read metadata for '{old_name}'.")
+
         from dataclasses import replace as _replace
 
         new_info = _replace(info, name=new_name)
         self.create_index(new_info)
-        old_store = self._store_path(old_name)
-        if old_store.exists():
-            old_store.rename(self._store_path(new_name))
+
+        # Rename backend-specific files
+        self._rename_backend_files(old_name, new_name, info.vector_backend)
+
+        # Rename BM25 file
         old_bm25 = self._bm25_path(old_name)
         if old_bm25.exists():
             old_bm25.rename(self._bm25_path(new_name))
+
         old_meta.unlink(missing_ok=True)
         if self._active_info and self._active_info.name == old_name:
             self._active_info = new_info
@@ -180,7 +200,9 @@ class RAGManager:
                 user_message=f"Source path for index '{name}' no longer exists.",
             )
 
-        store = VectorStore()
+        from anythink.rag.backends.registry import get_backend
+
+        store = get_backend(info.vector_backend)
         exts = _PROJECT_EXTS if info.index_type == "project" else _ALL_EXTS
         files = [p for p in source.rglob("*") if p.is_file() and p.suffix.lower() in exts]
 
@@ -193,16 +215,14 @@ class RAGManager:
                 all_metas.append(meta)
 
         if all_texts:
-            # Embed in batches of 64
             batch_size = 64
             all_vectors: list[list[float]] = []
             for i in range(0, len(all_texts), batch_size):
                 batch = all_texts[i : i + batch_size]
                 vecs = await backend.embed(batch)
                 all_vectors.extend(vecs)
-            store.add(all_texts, all_metas, all_vectors)
+            store.add(all_texts, list(all_metas), all_vectors)
 
-        # Update metadata
         from datetime import datetime
 
         info.last_indexed = datetime.utcnow()
@@ -210,10 +230,9 @@ class RAGManager:
         info.chunk_count = store.count()
         info.embedding_backend = backend.name
 
-        # Persist store if configured
         if info.persistence_mode == "persist":
             self._cache_dir.mkdir(parents=True, exist_ok=True)
-            store.persist(self._store_path(name))
+            store.persist(self._store_base_path(name))
 
         self.create_index(info)
         return info
@@ -226,15 +245,16 @@ class RAGManager:
         if info is None:
             return False
 
-        store_path = self._store_path(name)
-        if store_path.exists():
-            self._active_store = VectorStore.load(store_path)
-        else:
-            # Index not yet built — use empty store; retrieval will return nothing
-            # until the user runs /rag rebuild <name>
-            self._active_store = VectorStore()
+        from anythink.rag.backends.registry import load_store, store_exists
 
-        # Load BM25 index if persisted (available after first ingestion with persist mode)
+        base = self._store_base_path(name)
+        if store_exists(info.vector_backend, base):
+            self._active_store = load_store(info.vector_backend, base)
+        else:
+            from anythink.rag.backends.registry import get_backend
+
+            self._active_store = get_backend(info.vector_backend)
+
         bm25_path = self._bm25_path(name)
         if bm25_path.exists():
             self._active_bm25 = BM25Index.load(bm25_path)
@@ -261,20 +281,7 @@ class RAGManager:
         stage_callback: Callable[[str], None] | None = None,
         llm_expand_fn: Callable[[str], object] | None = None,
     ) -> list[RetrievalResult]:
-        """Retrieve chunks using the active index's configured strategy.
-
-        Uses the retrieval strategy, BM25 index, and re-ranker configured in
-        the active ``IndexInfo``.  Falls back to pure vector search if BM25 or
-        the re-ranker is unavailable.
-
-        Args:
-            query:           User query text.
-            backend:         Embedding backend for query vectorisation.
-            top_k:           Maximum results to return.
-            debug_callback:  Called with (emb_ms, candidates) for debug tracing.
-            stage_callback:  Called with stage label strings for UI updates.
-            llm_expand_fn:   Async callable for short-query expansion.
-        """
+        """Retrieve chunks using the active index's configured strategy."""
         from anythink.rag.retrieval import retrieve as _retrieve
 
         if self._active_store is None or self._active_store.count() == 0:
@@ -285,7 +292,6 @@ class RAGManager:
         reranking = info.reranking_enabled if info else False
         reranking_model = info.reranking_model if info else "bge-reranker-base"
 
-        # Resolve reranker (lazy — None if deps missing)
         reranker = None
         if reranking:
             from anythink.rag.reranker import get_reranker
@@ -295,7 +301,7 @@ class RAGManager:
         results = await _retrieve(
             query=query,
             backend=backend,
-            store=self._active_store,
+            store=self._active_store,  # type: ignore[arg-type]
             bm25=self._active_bm25,
             strategy=strategy,
             top_k=top_k,
@@ -339,10 +345,34 @@ class RAGManager:
         safe = name.replace(" ", "_").replace("/", "_")
         return self._rag_dir / f"{safe}.yaml"
 
-    def _store_path(self, name: str) -> Path:
+    def _store_base_path(self, name: str) -> Path:
+        """Base path (no extension) for vector store files."""
+        safe = name.replace(" ", "_").replace("/", "_")
+        return self._cache_dir / safe
+
+    def _legacy_store_path(self, name: str) -> Path:
+        """Full path to old-style pure store (.store.gz) — for cleanup only."""
         safe = name.replace(" ", "_").replace("/", "_")
         return self._cache_dir / f"{safe}.store.gz"
 
     def _bm25_path(self, name: str) -> Path:
         safe = name.replace(" ", "_").replace("/", "_")
         return self._cache_dir / f"{safe}.bm25.gz"
+
+    def _delete_backend_files(self, name: str, vector_backend: str) -> None:
+        from anythink.rag.backends.registry import get_backend_class
+
+        cls = get_backend_class(vector_backend)
+        cls.delete_files(self._store_base_path(name))
+        # Also clean up legacy pure store in case of migration
+        self._legacy_store_path(name).unlink(missing_ok=True)
+
+    def _rename_backend_files(self, old_name: str, new_name: str, vector_backend: str) -> None:
+        from anythink.rag.backends.registry import get_backend_class
+
+        cls = get_backend_class(vector_backend)
+        cls.rename_files(self._store_base_path(old_name), self._store_base_path(new_name))
+        # Also rename legacy pure store if present
+        old_legacy = self._legacy_store_path(old_name)
+        if old_legacy.exists():
+            old_legacy.rename(self._legacy_store_path(new_name))

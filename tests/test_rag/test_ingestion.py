@@ -166,8 +166,8 @@ class TestRunIngestionWithPersistedStore:
         )
         mgr.create_index(info)
         await run_ingestion("persist-idx", mgr, backend)
-        store_path = mgr._store_path("persist-idx")
-        assert store_path.exists()
+        from anythink.rag.backends.registry import store_exists
+        assert store_exists("pure", mgr._store_base_path("persist-idx"))
 
     async def test_rebuild_mode_does_not_write_store_file(
         self, mgr: RAGManager, backend: MockEmbeddingBackend, tmp_path: Path
@@ -183,8 +183,8 @@ class TestRunIngestionWithPersistedStore:
         )
         mgr.create_index(info)
         await run_ingestion("rebuild-idx", mgr, backend)
-        store_path = mgr._store_path("rebuild-idx")
-        assert not store_path.exists()
+        from anythink.rag.backends.registry import store_exists
+        assert not store_exists("pure", mgr._store_base_path("rebuild-idx"))
 
 
 class TestRunIngestionManagerPipeline:

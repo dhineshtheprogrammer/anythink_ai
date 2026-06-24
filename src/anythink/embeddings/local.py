@@ -5,7 +5,17 @@ from __future__ import annotations
 from anythink.embeddings.base import BaseEmbeddingBackend
 
 _DEFAULT_MODEL = "all-MiniLM-L6-v2"
-_DIMS = 384  # all-MiniLM-L6-v2 output dimension
+
+SUPPORTED_MODELS: dict[str, int] = {
+    "all-MiniLM-L6-v2": 384,
+    "all-MiniLM-L12-v2": 384,
+    "bge-small-en-v1.5": 384,
+    "bge-base-en-v1.5": 768,
+    "bge-large-en-v1.5": 1024,
+    "bge-m3": 1024,
+    "e5-base-v2": 768,
+    "e5-large-v2": 1024,
+}
 
 
 class LocalEmbeddingBackend(BaseEmbeddingBackend):
@@ -44,4 +54,4 @@ class LocalEmbeddingBackend(BaseEmbeddingBackend):
 
     @property
     def dimensions(self) -> int:
-        return _DIMS
+        return SUPPORTED_MODELS.get(self._model_name, 384)

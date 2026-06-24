@@ -89,6 +89,7 @@ class HUDWidget(Static):
     context_window: reactive[int] = reactive(0)
     search_enabled: reactive[bool] = reactive(False)
     rag_index: reactive[str] = reactive("")
+    rag_embedding: reactive[str] = reactive("")
     session_cost: reactive[float] = reactive(0.0)
     debug_active: reactive[bool] = reactive(False)
     debug_level: reactive[int] = reactive(2)
@@ -176,6 +177,9 @@ class HUDWidget(Static):
     def watch_rag_index(self) -> None:
         self._refresh_hud()
 
+    def watch_rag_embedding(self) -> None:
+        self._refresh_hud()
+
     def watch_session_cost(self) -> None:
         self._refresh_hud()
 
@@ -211,6 +215,8 @@ class HUDWidget(Static):
         self.context_window = state.context_window
         self.search_enabled = state.search_enabled
         self.rag_index = ctx.config.active_rag_index or ""
+        rag_mgr = ctx.rag_manager
+        self.rag_embedding = rag_mgr.active_embedding_model if rag_mgr.is_active else ""
         self.theme_name = ctx.config.active_theme
         self._warn_yellow = ctx.config.context_warning_yellow
         self._warn_orange = ctx.config.context_warning_orange
@@ -340,6 +346,10 @@ class HUDWidget(Static):
         else:
             line.append(f"{rag_icon} ", style=hm)
         line.append(rag_label, style=rag_style)
+        if self.rag_index and self.rag_embedding:
+            emb_short = self.rag_embedding if width >= 100 else self.rag_embedding[:14]
+            line.append("  ·  ", style=hm)
+            line.append(emb_short, style=hm)
 
         if self.session_cost > 0:
             line.append_text(sep)

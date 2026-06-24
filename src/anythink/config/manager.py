@@ -171,6 +171,10 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "icon_style": frozenset({"unicode", "ascii"}),
     # V3
     "spend_budget_period": frozenset({"daily", "monthly"}),
+    # RAG V2
+    "rag_retrieval_strategy": frozenset({"vector", "bm25", "hybrid", "mmr"}),
+    "rag_chunk_strategy": frozenset({"fixed", "sentence", "paragraph", "semantic", "code", "heading"}),
+    "rag_no_match_behavior": frozenset({"graceful", "passthrough"}),
     # V4 MMOS
     "mmos_mode": frozenset({"online", "offline", "auto"}),
     "mmos_priority": frozenset({"quality", "reliability", "hybrid"}),
@@ -271,6 +275,17 @@ class ConfigManager:
                 float(spend_budget_soft_limit) if spend_budget_soft_limit is not None else None
             ),
             spend_budget_period=str(raw.get("spend_budget_period", "monthly")),
+            # RAG V2
+            rag_threshold=float(raw.get("rag_threshold", 0.65)),
+            rag_top_k=int(raw.get("rag_top_k", 3)),
+            rag_reranking=bool(raw.get("rag_reranking", False)),
+            rag_retrieval_strategy=str(raw.get("rag_retrieval_strategy", "vector")),
+            rag_chunk_strategy=str(raw.get("rag_chunk_strategy", "fixed")),
+            rag_chunk_size=int(raw.get("rag_chunk_size", 512)),
+            rag_chunk_overlap=int(raw.get("rag_chunk_overlap", 100)),
+            rag_quality_indicators=bool(raw.get("rag_quality_indicators", True)),
+            rag_confidence_display=bool(raw.get("rag_confidence_display", True)),
+            rag_no_match_behavior=str(raw.get("rag_no_match_behavior", "graceful")),
             # V4 MMOS
             mmos_enabled=bool(raw.get("mmos_enabled", False)),
             mmos_mode=str(raw.get("mmos_mode", "auto")),
@@ -320,6 +335,18 @@ class ConfigManager:
         data["spend_budget_period"] = config.spend_budget_period
         if config.spend_budget_soft_limit is not None:
             data["spend_budget_soft_limit"] = config.spend_budget_soft_limit
+
+        # RAG V2 fields
+        data["rag_threshold"] = config.rag_threshold
+        data["rag_top_k"] = config.rag_top_k
+        data["rag_reranking"] = config.rag_reranking
+        data["rag_retrieval_strategy"] = config.rag_retrieval_strategy
+        data["rag_chunk_strategy"] = config.rag_chunk_strategy
+        data["rag_chunk_size"] = config.rag_chunk_size
+        data["rag_chunk_overlap"] = config.rag_chunk_overlap
+        data["rag_quality_indicators"] = config.rag_quality_indicators
+        data["rag_confidence_display"] = config.rag_confidence_display
+        data["rag_no_match_behavior"] = config.rag_no_match_behavior
 
         # V4 MMOS fields
         data["mmos_enabled"] = config.mmos_enabled

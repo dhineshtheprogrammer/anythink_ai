@@ -30,6 +30,18 @@ class EmbeddingRegistry:
             return b
         return next((b for b in self._backends.values() if b.is_available()), None)
 
+    def list_all(self) -> list[dict[str, object]]:
+        """Return info dicts for all registered backends (used by wizard/settings panel)."""
+        return [
+            {
+                "name": b.name,
+                "display_name": b.display_name,
+                "dimensions": b.dimensions,
+                "available": b.is_available(),
+            }
+            for b in self._backends.values()
+        ]
+
     @classmethod
     def from_entry_points(cls) -> EmbeddingRegistry:
         """Discover backends via the ``anythink.embedding_backends`` entry-point group."""

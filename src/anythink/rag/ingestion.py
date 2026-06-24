@@ -22,8 +22,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from anythink.exceptions import RAGError
 from anythink.rag.chunkers import dispatch_chunk
-from anythink.rag.parsers import dispatch_parser
-from anythink.rag.store import VectorStore
+from anythink.rag.parsers import dispatch_parser, is_url, parse_url
 
 if TYPE_CHECKING:
     from anythink.embeddings.base import BaseEmbeddingBackend
@@ -97,7 +96,7 @@ async def run_ingestion(
     backend: BaseEmbeddingBackend,
     *,
     mode: Literal["incremental", "full"] = "incremental",
-    extra_path: Path | None = None,
+    extra_path: Path | str | None = None,
     progress_callback: Callable[[IngestionProgress], None] | None = None,
 ) -> IngestionResult:
     """Execute the full 6-stage ingestion pipeline.
@@ -149,10 +148,22 @@ async def run_ingestion(
     exts = _PROJECT_EXTS if info.index_type == "project" else _ALL_EXTS
     mtime_cache = dict(info.file_mtime_cache)
 
-    # Collect candidate files from source (and optional extra_path)
+    # Detect whether extra_path is a URL (skip filesystem walk for it)
+    extra_url: str | None = None
+    extra_file_path: Path | None = None
+    if extra_path is not None:
+        extra_path_str = str(extra_path)
+        if is_url(extra_path_str):
+            extra_url = extra_path_str
+        else:
+            _ep = extra_path if isinstance(extra_path, Path) else Path(extra_path_str)
+            if _ep.exists():
+                extra_file_path = _ep
+
+    # Collect candidate files from source (and optional file extra_path)
     roots: list[Path] = [source]
-    if extra_path is not None and extra_path.exists():
-        roots.append(extra_path)
+    if extra_file_path is not None:
+        roots.append(extra_file_path)
 
     candidate_files: list[Path] = []
     for root in roots:
@@ -183,7 +194,11 @@ async def run_ingestion(
         else:
             unchanged_count += 1
 
-    prog.files_total = len(candidate_files)
+    # URL extra_path counts as 1 new file
+    if extra_url is not None:
+        new_count += 1
+
+    prog.files_total = len(candidate_files) + (1 if extra_url else 0)
     prog.files_new = new_count
     prog.files_changed = changed_count
     prog.files_unchanged = unchanged_count
@@ -193,6 +208,20 @@ async def run_ingestion(
     parsed_units: list[tuple[str, dict[str, Any]]] = []
     parsed_count = 0
     now_iso = _dt.datetime.now(_dt.UTC).isoformat()
+
+    # Parse URL extra_path first (if present)
+    if extra_url is not None:
+        _update(2, "Document Parsing", current_file=extra_url[:60])
+        try:
+            url_units = parse_url(extra_url)
+            for text, meta in url_units:
+                meta.setdefault("ingested_at", now_iso)
+                parsed_units.append((text, meta))
+            parsed_count += 1
+        except RAGError as exc:
+            errors.append(f"{extra_url}: {exc.user_message}")
+        except Exception as exc:
+            errors.append(f"{extra_url}: {exc}")
 
     for fpath in to_process:
         _update(2, "Document Parsing", current_file=fpath.name)
@@ -295,7 +324,9 @@ async def run_ingestion(
     # ── Stage 6: Vector Store Write ───────────────────────────────────────────
     _update(6, "Writing to store")
 
-    store = VectorStore()
+    from anythink.rag.backends.registry import get_backend
+
+    store = get_backend(info.vector_backend)
     if all_texts:
         store.add(all_texts, all_metas, all_vectors)
 
@@ -309,7 +340,7 @@ async def run_ingestion(
     # Persist vector store + BM25 if configured
     if info.persistence_mode == "persist":
         manager._cache_dir.mkdir(parents=True, exist_ok=True)  # noqa: SLF001
-        store.persist(manager._store_path(name))  # noqa: SLF001
+        store.persist(manager._store_base_path(name))  # noqa: SLF001
         if bm25.is_built:
             bm25.persist(manager._bm25_path(name))  # noqa: SLF001
 

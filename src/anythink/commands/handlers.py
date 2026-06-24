@@ -1365,46 +1365,77 @@ async def _rag(
         results = rm._last_results
         if not results:
             return CommandResult(message="No retrieval performed yet.")
-        scores = [r.relevance for r in results]
-        top_score = max(scores)
-        avg_score = sum(scores) / len(scores)
-        spread = max(scores) - min(scores)
-        threshold = ctx.config.rag_threshold
-        passed = top_score >= threshold
-        confidence = 0.5 * top_score + 0.3 * avg_score + 0.2 * (1.0 - spread)
-        if confidence >= 0.85:
-            tier = "STRONG ✓"
-        elif confidence >= 0.65:
-            tier = "GOOD ✓"
-        elif confidence >= 0.45:
-            tier = "WEAK ⚠"
-        else:
-            tier = "POOR ✗"
+        from anythink.rag.quality import compute_quality
+
+        q = compute_quality(results, ctx.config.rag_threshold)
         lines = [
             "Last retrieval quality:",
             f"  Chunks retrieved: {len(results)}",
-            f"  Top score:        {top_score:.0%}",
-            f"  Average score:    {avg_score:.0%}",
-            f"  Score spread:     {spread:.0%}",
-            f"  Confidence:       {confidence:.0%}  [{tier}]",
-            f"  Threshold:        {threshold:.0%}  →  {'PASS' if passed else 'BELOW THRESHOLD'}",
+            f"  Top score:        {q.top_score:.0%}",
+            f"  Average score:    {q.avg_score:.0%}",
+            f"  Score spread:     {q.score_spread:.0%}",
+            f"  Confidence:       {q.confidence:.0%}  [{q.tier.upper()} {('✓' if q.tier in ('strong', 'good') else '⚠' if q.tier == 'weak' else '✗')}]",
+            f"  Threshold:        {ctx.config.rag_threshold:.0%}  →  "
+            f"{'PASS' if q.passed_threshold else 'BELOW THRESHOLD'}",
         ]
-        any_high = any(x.relevance > 0.70 for x in results)
-        low = [r for r in results if r.relevance < 0.50 and any_high]
-        if low:
-            lines.append(f"  Low-relevance chunks: {len(low)} (below 50% while others >70%)")
+        if q.low_relevance_chunks:
+            lines.append(
+                f"  Low-relevance chunks: {len(q.low_relevance_chunks)} (below 50% while others >70%)"
+            )
         return CommandResult(message="\n".join(lines))
 
-    # /rag benchmark  — run test queries (Phase 4 full implementation)
+    # /rag benchmark  — run 5 sample queries, report latency + scores
     if sub == "benchmark":
         if not rm.is_active:
             return CommandResult(error=True, message="No active RAG index.")
-        return CommandResult(
-            message=(
-                "Benchmark feature coming in Phase 4. "
-                "Use /rag query <text> to test individual queries."
+        emb = ctx.embedding_registry.get_available(ctx.config.embedding_backend)
+        if emb is None:
+            return CommandResult(error=True, message="No embedding backend available.")
+        # Derive 5 test queries from corpus (first sentence of 5 evenly-spaced chunks)
+        store = rm._active_store
+        total = store.count() if store else 0
+        if total == 0:
+            return CommandResult(error=True, message="Index is empty — run /rag ingest first.")
+        import math as _math
+        import time as _time
+
+        sample_indices = [
+            int(i * (total - 1) / 4) for i in range(5)
+        ] if total >= 5 else list(range(total))
+        queries: list[str] = []
+        for idx in sample_indices:
+            text, _ = store.get_chunk_at(idx)
+            first_sentence = text.split(". ")[0].split("\n")[0][:120].strip()
+            if first_sentence:
+                queries.append(first_sentence)
+        if not queries:
+            return CommandResult(error=True, message="Could not derive sample queries.")
+        lines = [
+            f"Benchmarking '{rm.active_name}'  ({total:,} chunks, "
+            f"strategy={rm._active_info.retrieval_strategy if rm._active_info else 'vector'})",
+            f"{'#':<4} {'Query (truncated)':<45} {'Top score':>9} {'Results':>8} {'ms':>6}",
+            "─" * 76,
+        ]
+        total_ms = 0.0
+        for i, q in enumerate(queries, 1):
+            t0 = _time.monotonic()
+            try:
+                results = await rm.retrieve(q, emb, top_k=ctx.config.rag_top_k)
+            except Exception as exc:
+                lines.append(f"{i:<4} {'ERROR':<45}  {exc!s:.30}")
+                continue
+            elapsed_ms = (_time.monotonic() - t0) * 1000
+            total_ms += elapsed_ms
+            top = results[0].relevance if results else 0.0
+            flag = "✓" if top >= ctx.config.rag_threshold else "⚠"
+            q_disp = q[:43] + "…" if len(q) > 44 else q
+            lines.append(
+                f"{i:<4} {q_disp:<45}  {top:>7.0%}{flag}  {len(results):>5}   {elapsed_ms:>5.0f}"
             )
-        )
+        avg_ms = total_ms / len(queries) if queries else 0.0
+        lines.append("─" * 76)
+        lines.append(f"Average latency: {avg_ms:.0f} ms   (threshold: {ctx.config.rag_threshold:.0%})")
+        return CommandResult(message="\n".join(lines))
 
     # ── Backward-compat aliases ────────────────────────────────────────────
 

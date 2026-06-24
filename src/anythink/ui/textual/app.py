@@ -49,6 +49,8 @@ from anythink.ui.textual.panels.ratelimit_panel import RateLimitPanel
 from anythink.ui.textual.panels.session_list import SessionListPanel
 from anythink.ui.textual.panels.stats import StatsPanel
 from anythink.ui.textual.panels.tool_output import ToolOutputTab
+from anythink.ui.textual.rag_settings import RAGSettingsMenu
+from anythink.ui.textual.rag_wizard import RAGIndexWizard
 from anythink.ui.textual.settings_menu import SettingsMenu
 from anythink.ui.textual.theme_bridge import resolve, theme_css_vars
 from anythink.ui.textual.thinking_widget import ThinkingWidget
@@ -174,6 +176,15 @@ class AnythinkApp(App[int]):
         self._last_response_text: str = ""
         self._naming_prompt_bubble: SystemBubble | None = None
 
+        # ── RAG Phase 6 state ──────────────────────────────────────────────
+        # No-match: set when retrieved chunks all fall below threshold
+        self._pending_rag_nomatch: dict | None = None
+        # Override confirm: set when user picks option [2] (show chunks → y/n)
+        self._pending_rag_override_confirm: dict | None = None
+
+        # ── RAG Phase 7 state ──────────────────────────────────────────────
+        self._rag_wizard: RAGIndexWizard | None = None
+
         # ── V3 state ───────────────────────────────────────────────────────
         # Compare mode: aliases set by /compare; cleared once comparison fires
         self._pending_compare_aliases: list[str] | None = None
@@ -212,6 +223,7 @@ class AnythinkApp(App[int]):
             with TabPane("Tools", id="tab-tools"):
                 yield ToolOutputTab(id="tool-output")
         yield SettingsMenu(self._ctx, self._ctx.theme, id="settings-menu")
+        yield RAGSettingsMenu(self._ctx, self._ctx.theme, id="rag-settings-menu")
         yield OptimizePanel(self._ctx, self._ctx.theme, id="optimize-panel")
         yield RateLimitPanel(id="ratelimit-panel")
         yield PlanReviewPanel(id="plan-review-panel")
@@ -314,6 +326,21 @@ class AnythinkApp(App[int]):
         # ── undo confirmation ──────────────────────────────────────────────
         if self._pending_undo:
             await self._handle_undo_confirmation(text)
+            return
+
+        # ── RAG no-match 3-option flow ─────────────────────────────────────
+        if self._pending_rag_nomatch is not None:
+            await self._handle_rag_nomatch(text)
+            return
+
+        # ── RAG override confirm (option 2 → y/n) ──────────────────────────
+        if self._pending_rag_override_confirm is not None:
+            await self._handle_rag_override_confirm(text)
+            return
+
+        # ── RAG index wizard ───────────────────────────────────────────────
+        if self._rag_wizard is not None and self._rag_wizard.is_active:
+            await self._handle_rag_wizard_step(text)
             return
 
         # ── branch create confirmation ─────────────────────────────────────
@@ -596,6 +623,24 @@ class AnythinkApp(App[int]):
         """Escape: close settings if open; stop streaming if active; else focus input."""
         import contextlib
 
+        # RAG settings overlay — close if open
+        with contextlib.suppress(Exception):
+            rsm = self.query_one(RAGSettingsMenu)
+            if rsm.is_open():
+                rsm.action_close()
+                return
+
+        # Cancel active RAG wizard
+        if self._rag_wizard is not None and self._rag_wizard.is_active:
+            self._rag_wizard.cancel()
+            self._rag_wizard = None
+            with contextlib.suppress(Exception):
+                conv = self.query_one(ConversationView)
+                conv.add_bubble(
+                    SystemBubble("Wizard cancelled.", self._ctx.theme, kind="info")
+                )
+            return
+
         # Settings overlay takes highest priority
         with contextlib.suppress(Exception):
             sm = self.query_one(SettingsMenu)
@@ -739,6 +784,7 @@ class AnythinkApp(App[int]):
         # Don't steal focus while an interactive overlay is visible
         for panel_id in (
             "settings-menu",
+            "rag-settings-menu",
             "optimize-panel",
             "ratelimit-panel",
             "plan-review-panel",
@@ -1340,15 +1386,17 @@ class AnythinkApp(App[int]):
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
         if result.action == "rag_settings_open":
-            # Phase 7: will open the interactive RAG settings panel
-            if result.message:
-                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            try:
+                rsm = self.query_one(RAGSettingsMenu)
+                rsm.open()
+            except Exception:
+                if result.message:
+                    conv.add_bubble(SystemBubble(result.message, t, kind="info"))
             return
 
         if result.action == "rag_index_wizard":
-            # Phase 7: will launch the 8-step new-index wizard
-            if result.message:
-                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            prefill = result.extra.get("prefill_name", "") if result.extra else ""
+            await self._start_rag_wizard(prefill_name=str(prefill))
             return
 
         if result.action == "rag_benchmark":
@@ -1361,9 +1409,10 @@ class AnythinkApp(App[int]):
             parts = result.action.split(":", 3)
             index_name = parts[1] if len(parts) > 1 else ""
             ingest_mode = parts[2] if len(parts) > 2 else "incremental"
+            extra_path = parts[3] if len(parts) > 3 else None
             if index_name:
                 self.run_worker(
-                    self._run_rag_ingest(index_name, ingest_mode),
+                    self._run_rag_ingest(index_name, ingest_mode, extra_path=extra_path),
                     exclusive=False,
                     exit_on_error=False,
                 )
@@ -1626,8 +1675,17 @@ class AnythinkApp(App[int]):
         thinking: ThinkingWidget | None = None,
         is_replay: bool = False,
         replay_request_id: int = 0,
+        skip_rag: bool = False,
+        inject_rag_results: list | None = None,
     ) -> None:
-        """Stream the AI response token-by-token into *bubble*."""
+        """Stream the AI response token-by-token into *bubble*.
+
+        Args:
+            skip_rag:           When True, skip all RAG retrieval for this turn.
+            inject_rag_results: When set, use these results directly as RAG
+                                context (bypassing threshold check).  Used by
+                                the no-match option [2] override flow.
+        """
         import time
 
         buffer = ""
@@ -1679,76 +1737,142 @@ class AnythinkApp(App[int]):
         try:
             # ── RAG retrieval ──────────────────────────────────────────────
             rag_mgr = self._ctx.rag_manager
-            if rag_mgr.is_active:
+            if rag_mgr.is_active and not skip_rag:
                 if thinking is not None:
                     thinking.set_context("Retrieving context…")
                 emb = self._ctx.embedding_registry.get_available(self._ctx.config.embedding_backend)
-                if emb is not None:
+                if emb is not None or inject_rag_results is not None:
                     try:
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_rag_start = time.monotonic()
-                            _rag_top_k = self._ctx.config.rag_top_k + 7  # extra for inspector
-                        else:
-                            _rag_top_k = self._ctx.config.rag_top_k
-
-                        def _rag_debug_cb(emb_ms: float, candidates: int) -> None:
-                            if _debug_record is not None:
-                                _debug_record.rag_embedding_ms = emb_ms
-                                _debug_record.rag_candidates_evaluated = candidates
-
-                        def _rag_stage_cb(stage: str) -> None:
-                            if thinking is not None:
-                                thinking.set_context(stage)
-
-                        async def _rag_expand_fn(short_query: str) -> str:
-                            """Single-turn LLM call to expand a terse query."""
-                            try:
-                                expanded_parts: list[str] = []
-                                expand_prompt = (
-                                    f"Rephrase this search query more descriptively "
-                                    f"in one sentence: {short_query}"
-                                )
-                                async for token in state.provider.stream_chat(
-                                    messages=[
-                                        {
-                                            "role": "user",
-                                            "content": expand_prompt,
-                                        }
-                                    ],
-                                    model_id=state.model_id,
-                                    api_key=state.api_key,
-                                    max_tokens=60,
-                                ):
-                                    expanded_parts.append(token)
-                                return "".join(expanded_parts).strip()
-                            except Exception:
-                                return short_query
-
-                        rag_results = await rag_mgr.retrieve(
-                            query,
-                            emb,
-                            top_k=_rag_top_k,
-                            debug_callback=_rag_debug_cb if dm.is_active() else None,
-                            stage_callback=_rag_stage_cb,
-                            llm_expand_fn=_rag_expand_fn,
-                        )
                         _rag_threshold = self._ctx.config.rag_threshold
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_rag_end = time.monotonic()
-                            _debug_record.rag_results = list(rag_results)
-                            if _debug_panel is not None:
-                                n = sum(1 for r in rag_results if r.relevance >= _rag_threshold)
-                                await _debug_panel.append_event(
-                                    f"RAG retrieved {n} chunks above threshold",
-                                    f"{_debug_record.rag_duration_ms():.0f}ms",
-                                )
+
+                        if inject_rag_results is not None:
+                            # Phase 6: option [2] override — bypass threshold check
+                            rag_results = list(inject_rag_results)
+                        else:
+                            if dm.is_active() and _debug_record is not None:
+                                _debug_record.t_rag_start = time.monotonic()
+                                _rag_top_k = self._ctx.config.rag_top_k + 7  # extra for inspector
+                            else:
+                                _rag_top_k = self._ctx.config.rag_top_k
+
+                            def _rag_debug_cb(emb_ms: float, candidates: int) -> None:
+                                if _debug_record is not None:
+                                    _debug_record.rag_embedding_ms = emb_ms
+                                    _debug_record.rag_candidates_evaluated = candidates
+
+                            def _rag_stage_cb(stage: str) -> None:
+                                if thinking is not None:
+                                    thinking.set_context(stage)
+
+                            async def _rag_expand_fn(short_query: str) -> str:
+                                """Single-turn LLM call to expand a terse query."""
+                                try:
+                                    expanded_parts: list[str] = []
+                                    expand_prompt = (
+                                        f"Rephrase this search query more descriptively "
+                                        f"in one sentence: {short_query}"
+                                    )
+                                    async for token in state.provider.stream_chat(
+                                        messages=[
+                                            {
+                                                "role": "user",
+                                                "content": expand_prompt,
+                                            }
+                                        ],
+                                        model_id=state.model_id,
+                                        api_key=state.api_key,
+                                        max_tokens=60,
+                                    ):
+                                        expanded_parts.append(token)
+                                    return "".join(expanded_parts).strip()
+                                except Exception:
+                                    return short_query
+
+                            assert emb is not None  # guarded by outer check
+                            rag_results = await rag_mgr.retrieve(
+                                query,
+                                emb,
+                                top_k=_rag_top_k,
+                                debug_callback=_rag_debug_cb if dm.is_active() else None,
+                                stage_callback=_rag_stage_cb,
+                                llm_expand_fn=_rag_expand_fn,
+                            )
+                            if dm.is_active() and _debug_record is not None:
+                                _debug_record.t_rag_end = time.monotonic()
+                                _debug_record.rag_results = list(rag_results)
+                                if _debug_panel is not None:
+                                    n = sum(
+                                        1 for r in rag_results if r.relevance >= _rag_threshold
+                                    )
+                                    await _debug_panel.append_event(
+                                        f"RAG retrieved {n} chunks above threshold",
+                                        f"{_debug_record.rag_duration_ms():.0f}ms",
+                                    )
+
+                            # ── Phase 6: quality check + no-match flow ─────
+                            if (
+                                rag_results
+                                and self._ctx.config.rag_quality_indicators
+                                and self._ctx.config.rag_no_match_behavior != "passthrough"
+                            ):
+                                from anythink.rag.quality import compute_quality
+
+                                _q_results = rag_results[: self._ctx.config.rag_top_k]
+                                _quality = compute_quality(_q_results, _rag_threshold)
+
+                                if not _quality.passed_threshold:
+                                    # Remove thinking widget; bubble not yet in conv
+                                    if thinking is not None:
+                                        thinking.stop()
+                                        import contextlib as _cl
+
+                                        with _cl.suppress(Exception):
+                                            await thinking.remove()
+                                        thinking = None
+                                    if self._bubble_pairs and self._bubble_pairs[-1][1] is bubble:
+                                        self._bubble_pairs.pop()
+                                    # Store state for 3-option menu
+                                    self._pending_rag_nomatch = {
+                                        "query": query,
+                                        "results": rag_results,
+                                        "quality": _quality,
+                                    }
+                                    _conv = self.query_one(ConversationView)
+                                    top_pct = f"{_quality.top_score:.0%}"
+                                    thr_pct = f"{_rag_threshold:.0%}"
+                                    _active_name = rag_mgr.active_name or "index"
+                                    _menu = (
+                                        f"📚 No relevant context found in RAG index "
+                                        f"'{_active_name}'.\n"
+                                        f"Best match: {top_pct}  (threshold: {thr_pct})\n\n"
+                                        f"Choose how to proceed:\n"
+                                        f"  [1]  Answer from training data (ignore RAG)\n"
+                                        f"  [2]  Show closest matches, decide to send anyway\n"
+                                        f"  [3]  Rephrase your query"
+                                    )
+                                    _conv.add_bubble(
+                                        SystemBubble(_menu, t, kind="warning")
+                                    )
+                                    self._active_ai_bubble = None
+                                    import contextlib as _cl2
+
+                                    with _cl2.suppress(Exception):
+                                        self.query_one(HintBar).set_streaming(False)
+                                    with _cl2.suppress(Exception):
+                                        self.query_one(TipsBar).stop()
+                                    return
 
                         # Inject top-k chunks that pass the relevance threshold
-                        inject_results = [
-                            r
-                            for r in rag_results[: self._ctx.config.rag_top_k]
-                            if r.relevance >= _rag_threshold
-                        ]
+                        if inject_rag_results is not None:
+                            # Override mode: inject all provided results
+                            inject_results = list(inject_rag_results)[: self._ctx.config.rag_top_k]
+                        else:
+                            inject_results = [
+                                r
+                                for r in rag_results[: self._ctx.config.rag_top_k]
+                                if r.relevance >= _rag_threshold
+                            ]
+
                         if inject_results:
                             context_parts = "\n\n".join(
                                 f"[Source: {r.source_label()}]\n{r.chunk_text}"
@@ -1761,7 +1885,17 @@ class AnythinkApp(App[int]):
                                     TextPart(query),
                                 ],
                             )
-                            bubble._retrieval_results = inject_results
+                            # Phase 6: attach quality to bubble for footer rendering
+                            if (
+                                self._ctx.config.rag_quality_indicators
+                                and inject_rag_results is None  # don't recompute for override
+                            ):
+                                from anythink.rag.quality import compute_quality as _cq
+
+                                _inject_quality = _cq(inject_results, _rag_threshold)
+                                bubble.set_rag_quality(_inject_quality, inject_results)
+                            else:
+                                bubble._retrieval_results = inject_results
                     except Exception:  # nosec B110 - RAG errors are non-fatal
                         if dm.is_active() and _debug_record is not None:
                             _debug_record.t_rag_end = time.monotonic()
@@ -2016,7 +2150,13 @@ class AnythinkApp(App[int]):
                 _timer = get_icon("timer", self._ctx.config)
                 bubble.set_debug_footer(f"  {_timer} " + " · ".join(_footer_parts))
 
-    async def _run_rag_ingest(self, index_name: str, mode: str = "incremental") -> None:
+    async def _run_rag_ingest(
+        self,
+        index_name: str,
+        mode: str = "incremental",
+        *,
+        extra_path: str | None = None,
+    ) -> None:
         """Background worker: run the 6-stage ingestion pipeline with live progress."""
         from anythink.rag.ingestion import IngestionProgress, run_ingestion
 
@@ -2081,6 +2221,7 @@ class AnythinkApp(App[int]):
                 self._ctx.rag_manager,
                 emb,
                 mode=mode,  # type: ignore[arg-type]
+                extra_path=extra_path,
                 progress_callback=_on_progress,
             )
         except RAGError as exc:
@@ -2110,6 +2251,171 @@ class AnythinkApp(App[int]):
     async def _rebuild_rag_index(self, index_name: str) -> None:
         """Background worker: full rebuild — delegates to the ingestion pipeline."""
         await self._run_rag_ingest(index_name, mode="full")
+
+    # ── RAG Phase 6: no-match 3-option flow ───────────────────────────────
+
+    async def _handle_rag_nomatch(self, text: str) -> None:
+        """Handle [1]/[2]/[3] choice after a RAG no-match event."""
+        choice = text.strip()
+        pending = self._pending_rag_nomatch
+        if pending is None:
+            return
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+        query: str = pending["query"]
+        results: list = pending["results"]
+
+        if choice == "1":
+            # Answer from training data — resend query without RAG
+            self._pending_rag_nomatch = None
+            await self._launch_retry_stream(query, skip_rag=True)
+
+        elif choice == "2":
+            # Show closest matches; transition to override-confirm state
+            self._pending_rag_nomatch = None
+            lines = [f"Closest matches (below threshold):"]
+            for i, r in enumerate(results[: self._ctx.config.rag_top_k + 2], 1):
+                lines.append(f"  {i}. {r.source_label()}  [{r.relevance:.0%}]")
+                lines.append(f"     {r.excerpt(80)}")
+            lines.append("\nSend with this low-quality context anyway? [y/n]")
+            conv.add_bubble(SystemBubble("\n".join(lines), t, kind="info"))
+            self._pending_rag_override_confirm = {"query": query, "results": results}
+
+        elif choice == "3":
+            # Rephrase — pop the user message and pre-fill input
+            self._pending_rag_nomatch = None
+            if self._state and self._state.history and self._state.history[-1].role == "user":
+                self._state.history.pop()
+            inp = self.query_one(Input)
+            inp.value = query
+            inp.focus()
+            conv.add_bubble(
+                SystemBubble("Edit your query above and press Enter to retry.", t, kind="info")
+            )
+
+        else:
+            conv.add_bubble(
+                SystemBubble("Please enter 1, 2, or 3.", t, kind="info")
+            )
+
+    async def _handle_rag_override_confirm(self, text: str) -> None:
+        """Handle y/n after the user sees the low-relevance chunk inspector."""
+        choice = text.strip().lower()
+        pending = self._pending_rag_override_confirm
+        if pending is None:
+            return
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+
+        if choice in ("y", "yes"):
+            self._pending_rag_override_confirm = None
+            query: str = pending["query"]
+            results: list = pending["results"]
+            await self._launch_retry_stream(query, inject_rag_results=results)
+        elif choice in ("n", "no"):
+            self._pending_rag_override_confirm = None
+            if self._state and self._state.history and self._state.history[-1].role == "user":
+                self._state.history.pop()
+            conv.add_bubble(
+                SystemBubble(
+                    "Cancelled. Rephrase your query and try again.", t, kind="info"
+                )
+            )
+        else:
+            conv.add_bubble(SystemBubble("Please enter y or n.", t, kind="info"))
+
+    # ── RAG Phase 7: new-index wizard ─────────────────────────────────────
+
+    async def _start_rag_wizard(self, prefill_name: str = "") -> None:
+        """Launch the 8-step new-index creation wizard."""
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+
+        if self._rag_wizard is None:
+            self._rag_wizard = RAGIndexWizard(self._ctx)
+
+        step = self._rag_wizard.start(prefill_name=prefill_name)
+        conv.add_bubble(SystemBubble(step.prompt, t, kind="rag"))
+
+    async def _handle_rag_wizard_step(self, text: str) -> None:
+        """Process one wizard step and show the next prompt or completion."""
+        if self._rag_wizard is None:
+            return
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+
+        step = self._rag_wizard.handle_input(text)
+        conv.add_bubble(SystemBubble(step.prompt, t, kind="rag" if not step.done else "success"))
+
+        if step.done:
+            self._rag_wizard = None
+            if step.cancelled:
+                return
+            if step.result is not None:
+                try:
+                    self._ctx.rag_manager.create_index(step.result)
+                    if step.ingest_now:
+                        self.run_worker(
+                            self._run_rag_ingest(step.result.name, "incremental"),
+                            exclusive=False,
+                            exit_on_error=False,
+                        )
+                    if self._state is not None:
+                        self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+                except Exception as exc:
+                    conv.add_bubble(
+                        SystemBubble(f"Failed to create index: {exc}", t, kind="error")
+                    )
+
+    async def _launch_retry_stream(
+        self,
+        query: str,
+        *,
+        skip_rag: bool = False,
+        inject_rag_results: list | None = None,
+    ) -> None:
+        """Create a new ThinkingWidget+AIBubble and launch _stream_response().
+
+        Used by the RAG no-match handlers to retry the query with modified
+        RAG behaviour (skip entirely, or inject override results).
+        """
+        if self._state is None:
+            return
+
+        state = self._state
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+
+        thinking = ThinkingWidget(t)
+        conv.add_bubble(thinking)
+
+        bubble = AIBubble(
+            t,
+            model_alias=state.model_id,
+            provider=state.provider.display_name,
+            config=self._ctx.config,
+        )
+
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            self.query_one(TipsBar).start()
+
+        self.run_worker(
+            self._stream_response(
+                state,
+                bubble,
+                query,
+                thinking=thinking,
+                skip_rag=skip_rag,
+                inject_rag_results=inject_rag_results,
+            ),
+            exclusive=False,
+            exit_on_error=False,
+        )
 
     async def _run_exec_tool(self, language: str, code: str) -> None:
         """Background worker: execute code and feed result to the AI."""

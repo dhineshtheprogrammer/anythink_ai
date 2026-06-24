@@ -30,7 +30,7 @@ class IndexInfo:
     reranking_model: str = "bge-reranker-base"
     quality_threshold: float = 0.65
     top_k: int = 3
-    vector_backend: str = "pure"  # pure|faiss|chroma|lance|pinecone|azure
+    vector_backend: str = "faiss"  # pure|faiss|chroma|lance|pinecone|azure (falls back to pure if faiss-cpu not installed)
     ingestion_history: list[dict[str, Any]] = field(default_factory=list)
     file_mtime_cache: dict[str, float] = field(default_factory=dict)
 
@@ -83,7 +83,7 @@ class IndexInfo:
             reranking_model=str(data.get("reranking_model", "bge-reranker-base")),
             quality_threshold=float(data.get("quality_threshold", 0.65)),
             top_k=int(data.get("top_k", 3)),
-            vector_backend=str(data.get("vector_backend", "pure")),
+            vector_backend=str(data.get("vector_backend", "faiss")),
             ingestion_history=list(data.get("ingestion_history", [])),
             file_mtime_cache=dict(data.get("file_mtime_cache", {})),
         )
