@@ -646,29 +646,206 @@ async def _plugins(
     )
 
 
-async def _search(
+async def _search(  # noqa: C901
     ctx: AppContext,
     args: str,
     state: ChatState,
     registry: CommandRegistry,
 ) -> CommandResult:
-    if not args:
-        return CommandResult(error=True, message="Usage: /search on|off|<query>")
+    from dataclasses import replace as _replace
 
-    sub = args.strip().lower()
+    parts = args.strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    rest = parts[1] if len(parts) > 1 else ""
 
+    # ── Toggle / mode commands ──────────────────────────────────────
     if sub == "on":
         state.search_enabled = True
-        return CommandResult(message="Web search enabled for this session.")
+        state.search_mode = "general"
+        return CommandResult(
+            message="Web search ON (general mode).", action="search_hud_update"
+        )
 
     if sub == "off":
         state.search_enabled = False
-        return CommandResult(message="Web search disabled.")
+        return CommandResult(message="Web search OFF.", action="search_hud_update")
 
-    # One-off search with the full args as query
+    if sub == "news":
+        state.search_enabled = True
+        state.search_mode = "news"
+        return CommandResult(
+            message="Web search ON (news mode).", action="search_hud_update"
+        )
+
+    if sub == "toggle":
+        state.search_enabled = not state.search_enabled
+        label = "ON" if state.search_enabled else "OFF"
+        return CommandResult(message=f"Web search {label}.", action="search_hud_update")
+
+    if sub == "status":
+        mode = state.search_mode if state.search_enabled else "off"
+        inc = list(ctx.config.search_include_domains)
+        exc = list(ctx.config.search_exclude_domains)
+        status_lines = [
+            f"Search: {'ON' if state.search_enabled else 'OFF'} ({mode})",
+            f"Backend: {ctx.config.search_provider}",
+            f"Freshness: {ctx.config.search_freshness or 'none'}",
+            f"Include: {', '.join(inc) or 'none'}",
+            f"Exclude: {', '.join(exc) or 'none'}",
+            f"Safe search: {ctx.config.search_safe_search}",
+            f"Cache: {'on' if ctx.config.search_cache_enabled else 'off'} "
+            f"(TTL {ctx.config.search_cache_ttl_minutes}m)",
+        ]
+        return CommandResult(message="\n".join(status_lines))
+
+    # ── Freshness filter ────────────────────────────────────────────
+    if sub == "fresh":
+        sub2 = rest.strip().lower()
+        if sub2 == "off":
+            ctx.config = _replace(ctx.config, search_freshness=None)
+            ctx.config_manager.save(ctx.config)
+            return CommandResult(message="Freshness filter removed.")
+        if sub2.startswith("custom "):
+            dates = sub2[7:].strip().split()
+            if len(dates) == 2:
+                ctx.config = _replace(ctx.config, search_freshness=f"{dates[0]}:{dates[1]}")
+                ctx.config_manager.save(ctx.config)
+                return CommandResult(message=f"Freshness: {dates[0]} to {dates[1]}.")
+            return CommandResult(
+                error=True, message="Usage: /search fresh custom YYYY-MM-DD YYYY-MM-DD"
+            )
+        if sub2 in ("24h", "7d", "30d", "3m"):
+            ctx.config = _replace(ctx.config, search_freshness=sub2)
+            ctx.config_manager.save(ctx.config)
+            return CommandResult(message=f"Freshness filter set to {sub2}.")
+        return CommandResult(
+            error=True, message="Usage: /search fresh 24h|7d|30d|3m|off|custom <from> <to>"
+        )
+
+    # ── Domain filters ──────────────────────────────────────────────
+    if sub == "include":
+        sub2_parts = rest.strip().split()
+        if not sub2_parts:
+            return CommandResult(error=True, message="Usage: /search include <domain> …")
+        if sub2_parts[0] == "add":
+            domains = tuple(set(ctx.config.search_include_domains) | set(sub2_parts[1:]))
+        else:
+            domains = tuple(sub2_parts)
+        ctx.config = _replace(ctx.config, search_include_domains=domains)
+        ctx.config_manager.save(ctx.config)
+        return CommandResult(message=f"Include list: {', '.join(domains)}")
+
+    if sub == "exclude":
+        sub2_parts = rest.strip().split()
+        if not sub2_parts:
+            return CommandResult(error=True, message="Usage: /search exclude <domain> …")
+        if sub2_parts[0] == "add":
+            domains = tuple(set(ctx.config.search_exclude_domains) | set(sub2_parts[1:]))
+        else:
+            domains = tuple(sub2_parts)
+        ctx.config = _replace(ctx.config, search_exclude_domains=domains)
+        ctx.config_manager.save(ctx.config)
+        return CommandResult(message=f"Exclude list: {', '.join(domains)}")
+
+    if sub == "filters":
+        if rest.strip() == "clear":
+            ctx.config = _replace(
+                ctx.config, search_include_domains=(), search_exclude_domains=()
+            )
+            ctx.config_manager.save(ctx.config)
+            return CommandResult(message="Domain filters cleared.")
+        inc = list(ctx.config.search_include_domains)
+        exc = list(ctx.config.search_exclude_domains)
+        return CommandResult(
+            message=f"Include: {', '.join(inc) or 'none'}\nExclude: {', '.join(exc) or 'none'}"
+        )
+
+    # ── Cache management ────────────────────────────────────────────
+    if sub == "cache":
+        sub2 = rest.strip().lower()
+        if sub2 == "on":
+            ctx.config = _replace(ctx.config, search_cache_enabled=True)
+            ctx.config_manager.save(ctx.config)
+            return CommandResult(message="Search result caching ON.")
+        if sub2 == "off":
+            ctx.config = _replace(ctx.config, search_cache_enabled=False)
+            ctx.config_manager.save(ctx.config)
+            return CommandResult(message="Search result caching OFF.")
+        if sub2 == "clear":
+            ctx.search_cache.clear()
+            return CommandResult(message="Search cache cleared.")
+        if sub2 == "status":
+            s = ctx.search_cache.status()
+            return CommandResult(
+                message=f"Cache: {s['entries']} entries, "
+                f"oldest {s['oldest_age_s']}s ago (TTL {ctx.config.search_cache_ttl_minutes}m)"
+            )
+        return CommandResult(
+            error=True, message="Usage: /search cache on|off|clear|status"
+        )
+
+    # ── Backend management ──────────────────────────────────────────
+    if sub in ("backends", "backend"):
+        if sub == "backends" or not rest:
+            names = ctx.search_registry.names()
+            backend_lines: list[str] = ["Available search backends:"]
+            for name in names:
+                b = ctx.search_registry.get(name)
+                status = "available" if (b and b.is_available()) else "not configured"
+                backend_lines.append(f"  {name}: {status}")
+            return CommandResult(message="\n".join(backend_lines))
+        sub2_parts = rest.strip().split(None, 1)
+        sub2 = sub2_parts[0].lower()
+        backend_name = sub2_parts[1].strip() if len(sub2_parts) > 1 else ""
+        if sub2 == "use":
+            ctx.config = _replace(ctx.config, search_provider=backend_name)
+            ctx.config_manager.save(ctx.config)
+            return CommandResult(message=f"Search backend set to '{backend_name}'.")
+        if sub2 == "test":
+            b = ctx.search_registry.get(backend_name)
+            if b is None or not b.is_available():
+                return CommandResult(
+                    error=True, message=f"Backend '{backend_name}' not available."
+                )
+            try:
+                results = await b.search("test query", max_results=1)
+                return CommandResult(
+                    message=f"Backend '{backend_name}' OK — returned {len(results)} result(s)."
+                )
+            except Exception as exc:
+                return CommandResult(error=True, message=f"Backend test failed: {exc}")
+        return CommandResult(error=True, message="Usage: /search backend use|test <name>")
+
+    # ── Settings overlay ────────────────────────────────────────────
+    if sub == "settings":
+        return CommandResult(message="Opening search settings…", action="open_search_settings")
+
+    # ── URL fetch ───────────────────────────────────────────────────
+    if sub == "url":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /search url <url>")
+        return CommandResult(
+            message=f"Fetching {rest}…",
+            action="browse_request",
+            extra={"url": rest, "query": ""},
+        )
+
+    # ── Raw query (no rewriting) ────────────────────────────────────
+    if sub == "raw":
+        query = rest.strip()
+        if not query:
+            return CommandResult(error=True, message="Usage: /search raw <query>")
+        return CommandResult(
+            message=f"Searching (raw): {query}",
+            action="browse_request",
+            extra={"url": "", "query": query, "skip_rewrite": True},
+        )
+
+    # ── One-off manual search ───────────────────────────────────────
     query = args.strip()
     if not query:
-        return CommandResult(error=True, message="Usage: /search on|off|<query>")
+        return CommandResult(error=True, message="Usage: /search on|off|news|<query>")
+
     backend = ctx.search_registry.get_available(preferred=ctx.config.search_provider)
     if backend is None:
         return CommandResult(
@@ -677,20 +854,20 @@ async def _search(
         )
 
     try:
-        results = await backend.search(query)
+        results = await backend.search(query, max_results=5)
     except SearchError as exc:
         return CommandResult(error=True, message=exc.user_message)
 
     if not results:
         return CommandResult(message=f"No results found for '{query}'.")
 
-    lines = [f"Search results for '{query}':"]
+    result_lines = [f"Search results for '{query}':"]
     for i, r in enumerate(results, 1):
-        lines.append(f"  {i}. {r.title}")
-        lines.append(f"     {r.url}")
+        result_lines.append(f"  {i}. {r.title}")
+        result_lines.append(f"     {r.url}")
         if r.snippet:
-            lines.append(f"     {r.snippet[:120]}")
-    return CommandResult(message="\n".join(lines))
+            result_lines.append(f"     {r.snippet[:120]}")
+    return CommandResult(message="\n".join(result_lines))
 
 
 async def _exit_cmd(

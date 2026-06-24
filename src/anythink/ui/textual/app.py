@@ -1385,6 +1385,9 @@ class AnythinkApp(App[int]):
         if result.action == "rag_hud_update" and self._state is not None:
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
+        if result.action == "search_hud_update" and self._state is not None:
+            self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+
         if result.action == "rag_settings_open":
             try:
                 rsm = self.query_one(RAGSettingsMenu)

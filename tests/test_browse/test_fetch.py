@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from anythink.browse.fetch import BrowseFetcher, BrowseTool, _strip_html
+from anythink.browse.fetch import BrowseFetcher, BrowseTool, _extract_tables, _strip_html
 
 
 class TestStripHtml:
@@ -30,6 +30,53 @@ class TestStripHtml:
 
     def test_plain_text_unchanged(self) -> None:
         assert _strip_html("hello world") == "hello world"
+
+    def test_extended_entities(self) -> None:
+        result = _strip_html("&mdash; &ldquo;hello&rdquo; &copy;")
+        assert "—" in result
+        assert "“" in result or '"' in result
+        assert "©" in result
+
+    def test_numeric_entity(self) -> None:
+        assert "A" in _strip_html("&#65;")
+
+    def test_hex_entity(self) -> None:
+        assert "A" in _strip_html("&#x41;")
+
+
+class TestExtractTables:
+    def test_simple_table_to_markdown(self) -> None:
+        html = (
+            "<table><tr><th>A</th><th>B</th></tr>"
+            "<tr><td>1</td><td>2</td></tr></table>"
+        )
+        result = _extract_tables(html)
+        assert "| A | B |" in result
+        assert "| 1 | 2 |" in result
+        assert "|---|" in result
+
+    def test_table_without_headers(self) -> None:
+        html = "<table><tr><td>X</td><td>Y</td></tr></table>"
+        result = _extract_tables(html)
+        assert "| X | Y |" in result
+
+    def test_empty_table_becomes_space(self) -> None:
+        html = "<table></table>"
+        result = _extract_tables(html)
+        assert "<table>" not in result
+
+    def test_strip_html_with_table(self) -> None:
+        html = (
+            "<p>Before</p>"
+            "<table><tr><th>Col1</th><th>Col2</th></tr>"
+            "<tr><td>Val1</td><td>Val2</td></tr></table>"
+            "<p>After</p>"
+        )
+        result = _strip_html(html)
+        assert "Col1" in result
+        assert "Val1" in result
+        assert "Before" in result
+        assert "After" in result
 
 
 class TestBrowseFetcherSnippets:

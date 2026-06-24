@@ -88,6 +88,7 @@ class HUDWidget(Static):
     tokens_estimated: reactive[bool] = reactive(False)
     context_window: reactive[int] = reactive(0)
     search_enabled: reactive[bool] = reactive(False)
+    search_mode: reactive[str] = reactive("general")
     rag_index: reactive[str] = reactive("")
     rag_embedding: reactive[str] = reactive("")
     session_cost: reactive[float] = reactive(0.0)
@@ -214,6 +215,7 @@ class HUDWidget(Static):
         self.tokens_estimated = state.tokens_estimated
         self.context_window = state.context_window
         self.search_enabled = state.search_enabled
+        self.search_mode = state.search_mode
         self.rag_index = ctx.config.active_rag_index or ""
         rag_mgr = ctx.rag_manager
         self.rag_embedding = rag_mgr.active_embedding_model if rag_mgr.is_active else ""
@@ -331,10 +333,16 @@ class HUDWidget(Static):
         search_style = hss if self.search_enabled else hm
         if width >= 60:
             line.append(f"{search_icon} Search: ", style=hm)
-            search_label = "ON" if self.search_enabled else "OFF"
+            if self.search_enabled:
+                search_label = "ON (news)" if self.search_mode == "news" else "ON"
+            else:
+                search_label = "OFF"
         else:
             line.append(f"{search_icon} ", style=hm)
-            search_label = "ON" if self.search_enabled else "—"
+            if self.search_enabled:
+                search_label = "N" if self.search_mode == "news" else "ON"
+            else:
+                search_label = "—"
         line.append(search_label, style=search_style)
         line.append_text(sep)
 
