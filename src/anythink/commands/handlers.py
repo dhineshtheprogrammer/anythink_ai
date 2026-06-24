@@ -94,9 +94,9 @@ def register_commands(registry: CommandRegistry) -> None:
     registry.register(
         SlashCommand(
             "rag",
-            "Manage RAG indexes and retrieval",
+            "Manage RAG indexes, ingestion, and retrieval",
             _rag,
-            "/rag list|new|use|off|rebuild|info|delete|status",
+            "/rag [status|on|off|index|ingest|query|chunks|sources|threshold|quality|settings]",
         )
     )
     registry.register(
@@ -667,6 +667,8 @@ async def _search(
 
     # One-off search with the full args as query
     query = args.strip()
+    if not query:
+        return CommandResult(error=True, message="Usage: /search on|off|<query>")
     backend = ctx.search_registry.get_available(preferred=ctx.config.search_provider)
     if backend is None:
         return CommandResult(
@@ -916,46 +918,499 @@ async def _branch(
 # ── Phase 4: RAG command ───────────────────────────────────────────────────────
 
 
+def _rag_status_msg(rm: object) -> str:
+    """Build a detailed status message for the active RAG state."""
+    from anythink.rag.manager import RAGManager
+
+    rm_: RAGManager = rm  # type: ignore[assignment]
+    if not rm_.is_active:
+        return "RAG is inactive. Use /rag on or /rag index use <name> to activate."
+    name = rm_.active_name or "?"
+    info = rm_.get_info(name)
+    if info is None:
+        return f"Active index: {name!r}  (metadata unavailable)"
+    last = info.last_indexed.strftime("%Y-%m-%d %H:%M") if info.last_indexed else "never"
+    lines = [
+        f"Active RAG index: {name!r}",
+        f"  Source:     {info.source_path}",
+        f"  Chunks:     {info.chunk_count:,}   Files: {info.file_count}",
+        f"  Strategy:   {info.chunk_strategy} chunking / {info.retrieval_strategy} retrieval",
+        f"  Embeddings: {info.embedding_backend}",
+        f"  Backend:    {info.vector_backend}",
+        f"  Threshold:  {info.quality_threshold:.0%}   Top-k: {info.top_k}",
+        f"  Re-ranking: {'on (' + info.reranking_model + ')' if info.reranking_enabled else 'off'}",
+        f"  Last built: {last}",
+    ]
+    return "\n".join(lines)
+
+
+def _rag_list_msg(rm: object) -> str:
+    """Format the index list table."""
+    from anythink.rag.manager import RAGManager
+
+    rm_: RAGManager = rm  # type: ignore[assignment]
+    indexes = rm_.list_indexes()
+    if not indexes:
+        return "No RAG indexes found. Use /rag index new to create one."
+    lines = [f"  {'Name':<22} {'Type':<12} {'Chunks':<8} {'Strategy':<10} Last indexed"]
+    lines.append("  " + "─" * 70)
+    for idx in indexes:
+        last = idx.last_indexed.strftime("%Y-%m-%d") if idx.last_indexed else "never"
+        marker = " ←" if rm_.active_name == idx.name else ""
+        lines.append(
+            f"  {idx.name:<22} {idx.index_type:<12} {idx.chunk_count:<8}"
+            f" {idx.chunk_strategy:<10} {last}{marker}"
+        )
+    return "\n".join(lines)
+
+
+def _rag_info_msg(info: object) -> str:
+    """Format detailed info for a single index."""
+    from anythink.rag.models import IndexInfo
+
+    i: IndexInfo = info  # type: ignore[assignment]
+    last = i.last_indexed.strftime("%Y-%m-%d %H:%M") if i.last_indexed else "never"
+    rerank = f"{i.reranking_model}" if i.reranking_enabled else "off"
+    lines = [
+        f"Name:            {i.name}",
+        f"Type:            {i.index_type}",
+        f"Source:          {i.source_path}",
+        f"Persistence:     {i.persistence_mode}",
+        f"Vector backend:  {i.vector_backend}",
+        f"Embedding:       {i.embedding_backend}",
+        f"Chunk strategy:  {i.chunk_strategy}  (size {i.chunk_size}, overlap {i.chunk_overlap})",
+        f"Retrieval:       {i.retrieval_strategy}",
+        f"Re-ranking:      {rerank}",
+        f"Threshold:       {i.quality_threshold:.0%}   Top-k: {i.top_k}",
+        f"Files:           {i.file_count}",
+        f"Chunks:          {i.chunk_count:,}",
+        f"Created:         {i.created_at.strftime('%Y-%m-%d %H:%M')}",
+        f"Last built:      {last}",
+    ]
+    if i.ingestion_history:
+        last_run = i.ingestion_history[-1]
+        lines.append(
+            f"Last ingest:     {last_run.get('timestamp', '?')} "
+            f"({last_run.get('files_processed', 0)} files, "
+            f"{last_run.get('duration_s', 0):.1f}s)"
+        )
+    return "\n".join(lines)
+
+
+async def _rag_index_cmd(
+    ctx: AppContext,
+    rest: str,
+    rm: object,
+) -> CommandResult:
+    """Handle /rag index <sub> ...."""
+    from anythink.rag.manager import RAGManager
+    from anythink.rag.models import IndexInfo
+
+    rm_: RAGManager = rm  # type: ignore[assignment]
+    parts = rest.strip().split(None, 1)
+    sub = parts[0].lower() if parts else ""
+    tail = parts[1].strip() if len(parts) > 1 else ""
+
+    # /rag index list
+    if sub in ("list", ""):
+        return CommandResult(message=_rag_list_msg(rm_))
+
+    # /rag index info <name>
+    if sub == "info":
+        name = tail or rm_.active_name or ""
+        if not name:
+            return CommandResult(error=True, message="Usage: /rag index info <name>")
+        info = rm_.get_info(name)
+        if info is None:
+            return CommandResult(error=True, message=f"No index named '{name}'.")
+        return CommandResult(message=_rag_info_msg(info))
+
+    # /rag index use <name>
+    if sub == "use":
+        if not tail:
+            return CommandResult(error=True, message="Usage: /rag index use <name>")
+        if rm_.use_index(tail):
+            from dataclasses import replace
+
+            new_cfg = replace(ctx.config, active_rag_index=tail)
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
+            return CommandResult(
+                message=f"RAG index '{tail}' is now active.", action="rag_hud_update"
+            )
+        return CommandResult(error=True, message=f"Index '{tail}' not found.")
+
+    # /rag index rebuild <name>
+    if sub == "rebuild":
+        name = tail or rm_.active_name or ""
+        if not name:
+            return CommandResult(error=True, message="Usage: /rag index rebuild <name>")
+        return CommandResult(
+            message=f"Rebuilding '{name}'…",
+            action=f"rag_rebuild:{name}",
+        )
+
+    # /rag index delete <name>
+    if sub == "delete":
+        if not tail:
+            return CommandResult(error=True, message="Usage: /rag index delete <name>")
+        try:
+            rm_.delete_index(tail)
+        except Exception as exc:
+            return CommandResult(error=True, message=str(exc))
+        return CommandResult(message=f"Index '{tail}' deleted.")
+
+    # /rag index rename <old> <new>
+    if sub == "rename":
+        rn_parts = tail.split(None, 1)
+        if len(rn_parts) < 2:
+            return CommandResult(error=True, message="Usage: /rag index rename <old> <new>")
+        old, new = rn_parts
+        try:
+            rm_.rename_index(old, new)
+        except Exception as exc:
+            return CommandResult(error=True, message=str(exc))
+        extra_msg = ""
+        if ctx.config.active_rag_index == old:
+            from dataclasses import replace
+
+            new_cfg = replace(ctx.config, active_rag_index=new)
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
+            extra_msg = " Active index updated."
+        return CommandResult(
+            message=f"Index '{old}' renamed to '{new}'.{extra_msg}",
+            action="rag_hud_update" if extra_msg else "",
+        )
+
+    # /rag index new [<name> [<type> <path> [<mode>]]]
+    if sub == "new":
+        if not tail:
+            # No args → launch interactive wizard (Phase 7)
+            return CommandResult(
+                message=(
+                    "Opening new index wizard…  "
+                    "(use /rag index new <name> <type> <path> for quick creation)"
+                ),
+                action="rag_index_wizard",
+            )
+        new_parts = tail.split(None, 3)
+        index_name = new_parts[0]
+        if len(new_parts) >= 3:
+            index_type = new_parts[1]
+            source_path = new_parts[2]
+            mode = new_parts[3] if len(new_parts) > 3 else "rebuild"
+            if index_type not in ("project", "document"):
+                return CommandResult(error=True, message="Type must be 'project' or 'document'.")
+            if mode not in ("rebuild", "persist"):
+                return CommandResult(error=True, message="Mode must be 'rebuild' or 'persist'.")
+            info = IndexInfo(
+                name=index_name,
+                index_type=index_type,
+                source_path=source_path,
+                persistence_mode=mode,
+            )
+            rm_.create_index(info)
+            return CommandResult(
+                message=(
+                    f"Index '{index_name}' created ({index_type}, {mode}).\n"
+                    f"Run /rag ingest to build it."
+                )
+            )
+        # Name provided but not enough args → show usage and trigger wizard
+        return CommandResult(
+            message=(
+                f"Quick create: /rag index new {index_name}"
+                f" project|document <path> [rebuild|persist]\n"
+                "Or open the wizard: /rag index new"
+            ),
+            action="rag_index_wizard",
+            extra={"prefill_name": index_name},
+        )
+
+    return CommandResult(
+        error=True,
+        message="Usage: /rag index list|new|use|info|rebuild|delete|rename",
+    )
+
+
+async def _rag_ingest_cmd(
+    ctx: AppContext,
+    rest: str,
+    rm: object,
+) -> CommandResult:
+    """Handle /rag ingest [--full] [--path <p>] [status|history]."""
+    from anythink.rag.manager import RAGManager
+
+    rm_: RAGManager = rm  # type: ignore[assignment]
+
+    # /rag ingest status
+    if rest.lower() == "status":
+        return CommandResult(
+            message=(
+                "No ingestion job currently running.\n"
+                "Use /rag ingest to start incremental ingestion."
+            )
+        )
+
+    # /rag ingest history
+    if rest.lower() == "history":
+        name = rm_.active_name
+        if not name:
+            return CommandResult(error=True, message="No active index.")
+        info = rm_.get_info(name)
+        if info is None or not info.ingestion_history:
+            return CommandResult(message=f"No ingestion history for '{name}'.")
+        lines = [f"Ingestion history for '{name}' (last 10):"]
+        for entry in reversed(info.ingestion_history[-10:]):
+            ts = entry.get("timestamp", "?")
+            files = entry.get("files_processed", 0)
+            dur = entry.get("duration_s", 0.0)
+            mode = entry.get("mode", "full")
+            lines.append(f"  {ts}  {files} files  {dur:.1f}s  [{mode}]")
+        return CommandResult(message="\n".join(lines))
+
+    # /rag ingest --path <path>
+    if rest.startswith("--path"):
+        path_val = rest[6:].strip()
+        if not path_val:
+            return CommandResult(error=True, message="Usage: /rag ingest --path <path>")
+        name = rm_.active_name
+        if not name:
+            return CommandResult(error=True, message="No active index. Use /rag index use <name>.")
+        return CommandResult(
+            message=f"Ingesting '{path_val}' into '{name}'…",
+            action=f"rag_ingest_start:{name}:incremental:{path_val}",
+        )
+
+    # /rag ingest --full
+    if rest == "--full":
+        name = rm_.active_name
+        if not name:
+            return CommandResult(error=True, message="No active index.")
+        return CommandResult(
+            message=f"Starting full rebuild of '{name}'…",
+            action=f"rag_rebuild:{name}",
+        )
+
+    # /rag ingest  (incremental, default)
+    if rest in ("", "--incremental"):
+        name = rm_.active_name
+        if not name:
+            return CommandResult(
+                error=True,
+                message="No active index. Use /rag index use <name> first.",
+            )
+        return CommandResult(
+            message=f"Starting incremental ingestion of '{name}'…",
+            action=f"rag_ingest_start:{name}:incremental",
+        )
+
+    return CommandResult(
+        error=True,
+        message="Usage: /rag ingest [--full] [--path <path>] [status|history]",
+    )
+
+
 async def _rag(
     ctx: AppContext,
     args: str,
     state: ChatState,
     registry: CommandRegistry,
 ) -> CommandResult:
-    """Manage RAG indexes: list, create, use, off, rebuild, info, delete, status."""
+    """RAG command namespace: indexes, ingestion, retrieval, quality."""
     parts = args.strip().split(None, 1)
-    sub = parts[0].lower() if parts else "status"
+    sub = parts[0].lower() if parts else ""
     rest = parts[1].strip() if len(parts) > 1 else ""
     rm = ctx.rag_manager
 
-    # /rag status
-    if sub in ("status", ""):
-        if rm.is_active:
-            name = rm.active_name or "?"
-            info = rm.get_info(name)
-            msg = f"Active RAG index: {name!r}"
-            if info:
-                msg += f" ({info.chunk_count:,} chunks, {info.file_count} files)"
-        else:
-            msg = "No RAG index active. Use /rag use <name> to activate one."
-        return CommandResult(message=msg)
+    # ── Top-level ──────────────────────────────────────────────────────────
 
-    # /rag list
-    if sub == "list":
-        indexes = rm.list_indexes()
-        if not indexes:
-            return CommandResult(message="No RAG indexes defined. Use /rag new to create one.")
-        lines = [f"  {'Name':<20} {'Type':<12} {'Chunks':<8} Last indexed"]
-        lines.append("  " + "─" * 60)
-        for idx in indexes:
-            last = idx.last_indexed.strftime("%Y-%m-%d") if idx.last_indexed else "never"
-            marker = " ←" if rm.active_name == idx.name else ""
-            lines.append(
-                f"  {idx.name:<20} {idx.index_type:<12} {idx.chunk_count:<8} {last}{marker}"
+    # /rag  or  /rag status
+    if sub in ("", "status"):
+        return CommandResult(message=_rag_status_msg(rm))
+
+    # /rag on  — activate last-used index
+    if sub == "on":
+        last = ctx.config.active_rag_index
+        if not last:
+            indexes = rm.list_indexes()
+            if not indexes:
+                return CommandResult(
+                    error=True,
+                    message="No indexes exist. Use /rag index new to create one.",
+                )
+            last = indexes[0].name
+        if rm.use_index(last):
+            from dataclasses import replace
+
+            new_cfg = replace(ctx.config, active_rag_index=last)
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
+            return CommandResult(message=f"RAG activated: '{last}'.", action="rag_hud_update")
+        return CommandResult(error=True, message=f"Index '{last}' not found.")
+
+    # /rag off
+    if sub == "off":
+        rm.deactivate()
+        from dataclasses import replace
+
+        new_cfg = replace(ctx.config, active_rag_index=None)
+        ctx.config_manager.save(new_cfg)
+        ctx.config = new_cfg
+        return CommandResult(message="RAG deactivated.", action="rag_hud_update")
+
+    # /rag settings  — interactive RAG settings panel (Phase 7)
+    if sub == "settings":
+        return CommandResult(
+            message="Opening RAG settings…",
+            action="rag_settings_open",
+        )
+
+    # ── Sub-namespaces ─────────────────────────────────────────────────────
+
+    # /rag index <sub> ...
+    if sub == "index":
+        return await _rag_index_cmd(ctx, rest, rm)
+
+    # /rag ingest [options]
+    if sub == "ingest":
+        return await _rag_ingest_cmd(ctx, rest, rm)
+
+    # ── Retrieval commands ─────────────────────────────────────────────────
+
+    # /rag query <text>  — test retrieval without LLM
+    if sub == "query":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /rag query <text>")
+        if not rm.is_active:
+            return CommandResult(error=True, message="No active RAG index.")
+        emb = ctx.embedding_registry.get_available(ctx.config.embedding_backend)
+        if emb is None:
+            return CommandResult(error=True, message="No embedding backend available.")
+        try:
+            results = await rm.retrieve(rest, emb, top_k=ctx.config.rag_top_k + 5)
+        except Exception as exc:
+            return CommandResult(error=True, message=f"Retrieval error: {exc}")
+        if not results:
+            return CommandResult(message="No results found for that query.")
+        lines = [f"Query: {rest!r}", ""]
+        for i, r in enumerate(results, 1):
+            loc = ""
+            if r.start_line and r.end_line:
+                loc = f" L{r.start_line}–{r.end_line}"
+            elif r.page_number is not None:
+                loc = f" p.{r.page_number}"
+            flag = " ✓" if r.relevance >= ctx.config.rag_threshold else " ⚠"
+            lines.append(f"[{i}] {r.source_path}{loc}  relevance: {r.relevance:.0%}{flag}")
+            lines.append(f"    {r.excerpt(100)}")
+        threshold_note = (
+            f"\n(threshold: {ctx.config.rag_threshold:.0%}" " — chunks marked ✓ would be injected)"
+        )
+        return CommandResult(message="\n".join(lines) + threshold_note)
+
+    # /rag chunks  — show chunks from most recent retrieval
+    if sub == "chunks":
+        results = rm._last_results
+        if not results:
+            return CommandResult(
+                message="No chunks retrieved yet. Ask a question with RAG active first."
             )
+        lines = [f"Last retrieved chunks ({len(results)}):"]
+        for i, r in enumerate(results, 1):
+            loc = ""
+            if r.start_line and r.end_line:
+                loc = f" L{r.start_line}–{r.end_line}"
+            flag = " ✓" if r.relevance >= ctx.config.rag_threshold else " ⚠ low"
+            lines.append(f"\n[{i}] {r.source_path}{loc}  {r.relevance:.0%}{flag}")
+            lines.append(r.chunk_text[:300] + ("…" if len(r.chunk_text) > 300 else ""))
         return CommandResult(message="\n".join(lines))
 
-    # /rag info <name>
+    # /rag sources  — show just source references from most recent retrieval
+    if sub == "sources":
+        results = rm._last_results
+        if not results:
+            return CommandResult(message="No retrieval performed yet.")
+        lines = [f"Sources from last retrieval ({len(results)} chunks):"]
+        for i, r in enumerate(results, 1):
+            lines.append(f"  {i}. {r.source_label()}  [{r.relevance:.0%}]")
+        return CommandResult(message="\n".join(lines))
+
+    # /rag threshold [<value>]
+    if sub == "threshold":
+        if not rest:
+            return CommandResult(
+                message=(
+                    f"Current threshold: {ctx.config.rag_threshold:.2f}\n"
+                    "Usage: /rag threshold <0.0–1.0>"
+                )
+            )
+        try:
+            val = float(rest)
+            if not 0.0 <= val <= 1.0:
+                raise ValueError("out of range")
+        except ValueError:
+            return CommandResult(
+                error=True, message="Threshold must be a number between 0.0 and 1.0."
+            )
+        from dataclasses import replace
+
+        new_cfg = replace(ctx.config, rag_threshold=val)
+        ctx.config_manager.save(new_cfg)
+        ctx.config = new_cfg
+        return CommandResult(message=f"RAG relevance threshold set to {val:.2f}.")
+
+    # /rag quality  — show quality report for last retrieval
+    if sub == "quality":
+        results = rm._last_results
+        if not results:
+            return CommandResult(message="No retrieval performed yet.")
+        scores = [r.relevance for r in results]
+        top_score = max(scores)
+        avg_score = sum(scores) / len(scores)
+        spread = max(scores) - min(scores)
+        threshold = ctx.config.rag_threshold
+        passed = top_score >= threshold
+        confidence = 0.5 * top_score + 0.3 * avg_score + 0.2 * (1.0 - spread)
+        if confidence >= 0.85:
+            tier = "STRONG ✓"
+        elif confidence >= 0.65:
+            tier = "GOOD ✓"
+        elif confidence >= 0.45:
+            tier = "WEAK ⚠"
+        else:
+            tier = "POOR ✗"
+        lines = [
+            "Last retrieval quality:",
+            f"  Chunks retrieved: {len(results)}",
+            f"  Top score:        {top_score:.0%}",
+            f"  Average score:    {avg_score:.0%}",
+            f"  Score spread:     {spread:.0%}",
+            f"  Confidence:       {confidence:.0%}  [{tier}]",
+            f"  Threshold:        {threshold:.0%}  →  {'PASS' if passed else 'BELOW THRESHOLD'}",
+        ]
+        any_high = any(x.relevance > 0.70 for x in results)
+        low = [r for r in results if r.relevance < 0.50 and any_high]
+        if low:
+            lines.append(f"  Low-relevance chunks: {len(low)} (below 50% while others >70%)")
+        return CommandResult(message="\n".join(lines))
+
+    # /rag benchmark  — run test queries (Phase 4 full implementation)
+    if sub == "benchmark":
+        if not rm.is_active:
+            return CommandResult(error=True, message="No active RAG index.")
+        return CommandResult(
+            message=(
+                "Benchmark feature coming in Phase 4. "
+                "Use /rag query <text> to test individual queries."
+            )
+        )
+
+    # ── Backward-compat aliases ────────────────────────────────────────────
+
+    if sub == "list":
+        return CommandResult(message=_rag_list_msg(rm))
+
     if sub == "info":
         name = rest or rm.active_name or ""
         if not name:
@@ -963,86 +1418,59 @@ async def _rag(
         info = rm.get_info(name)
         if info is None:
             return CommandResult(error=True, message=f"No index named '{name}'.")
-        last = info.last_indexed.strftime("%Y-%m-%d %H:%M") if info.last_indexed else "never"
-        lines = [
-            f"Name:        {info.name}",
-            f"Type:        {info.index_type}",
-            f"Source:      {info.source_path}",
-            f"Persistence: {info.persistence_mode}",
-            f"Embeddings:  {info.embedding_backend}",
-            f"Files:       {info.file_count}",
-            f"Chunks:      {info.chunk_count:,}",
-            f"Last built:  {last}",
-        ]
-        return CommandResult(message="\n".join(lines))
+        return CommandResult(message=_rag_info_msg(info))
 
-    # /rag use <name>
     if sub == "use":
         if not rest:
             return CommandResult(error=True, message="Usage: /rag use <name>")
         if rm.use_index(rest):
-            # Persist active index in config
             from dataclasses import replace
 
-            new_config = replace(ctx.config, active_rag_index=rest)
-            ctx.config_manager.save(new_config)
+            new_cfg = replace(ctx.config, active_rag_index=rest)
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
             return CommandResult(
-                message=f"RAG index '{rest}' is now active.",
-                action="rag_hud_update",
+                message=f"RAG index '{rest}' is now active.", action="rag_hud_update"
             )
         return CommandResult(error=True, message=f"Index '{rest}' not found.")
 
-    # /rag off
-    if sub == "off":
-        rm.deactivate()
-        from dataclasses import replace
+    if sub == "new":
+        if not rest:
+            return CommandResult(
+                message=(
+                    "Usage: /rag index new <name> project|document <path>"
+                    " [rebuild|persist]\nOr open wizard: /rag index new"
+                ),
+                action="rag_index_wizard",
+            )
+        return await _rag_index_cmd(ctx, f"new {rest}", rm)
 
-        new_config = replace(ctx.config, active_rag_index=None)
-        ctx.config_manager.save(new_config)
-        return CommandResult(message="RAG deactivated.", action="rag_hud_update")
-
-    # /rag delete <name>
     if sub == "delete":
         if not rest:
             return CommandResult(error=True, message="Usage: /rag delete <name>")
         try:
             rm.delete_index(rest)
-        except Exception as e:
-            return CommandResult(error=True, message=str(e))
+        except Exception as exc:
+            return CommandResult(error=True, message=str(exc))
         return CommandResult(message=f"Index '{rest}' deleted.")
 
-    # /rag new <name> — interactive creation shortcut
-    if sub == "new":
-        if not rest:
-            return CommandResult(error=True, message="Usage: /rag new <name>")
-        # Use defaults; a future interactive wizard can be added
-        return CommandResult(
-            message=(
-                f"To create index '{rest}' interactively, use:\n"
-                f"  /rag new {rest} project|document <source-path> rebuild|persist\n"
-                "Example: /rag new my-code project /home/user/project rebuild"
-            ),
-            action="rag_new_request",
-        )
-
-    # /rag new <name> <type> <path> <mode>
-    if sub == "new" or (sub and " " in (args or "")):
-        # Already handled above; fall through to rebuild check
-        pass
-
-    # /rag rebuild <name>
     if sub == "rebuild":
         name = rest or rm.active_name or ""
         if not name:
             return CommandResult(error=True, message="Usage: /rag rebuild <name>")
         return CommandResult(
-            message=f"Rebuilding '{name}'…  (this may take a moment)",
+            message=f"Rebuilding '{name}'…",
             action=f"rag_rebuild:{name}",
         )
 
     return CommandResult(
         error=True,
-        message="Usage: /rag list|new|use|off|rebuild|info|delete|status",
+        message=(
+            "Usage: /rag [status|on|off|settings]\n"
+            "       /rag index [list|new|use|info|rebuild|delete|rename]\n"
+            "       /rag ingest [--full|--path <p>|status|history]\n"
+            "       /rag query <text> | chunks | sources | threshold <v> | quality | benchmark"
+        ),
     )
 
 

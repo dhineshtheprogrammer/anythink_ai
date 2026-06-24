@@ -1,0 +1,38 @@
+UP017 [*] Use `datetime.UTC` alias
+   --> src\anythink\rag\ingestion.py:193:28
+    |
+191 |     parsed_units: list[tuple[str, dict[str, Any]]] = []
+192 |     parsed_count = 0
+193 |     now_iso = datetime.now(timezone.utc).isoformat()
+    |                            ^^^^^^^^^^^^
+194 |
+195 |     for fpath in to_process:
+    |
+help: Convert to `datetime.UTC` alias
+
+UP017 [*] Use `datetime.UTC` alias
+   --> src\anythink\rag\ingestion.py:292:35
+    |
+290 |     duration = time.monotonic() - t_start
+291 |     history_entry: dict[str, Any] = {
+292 |         "timestamp": datetime.now(timezone.utc).isoformat(),
+    |                                   ^^^^^^^^^^^^
+293 |         "mode": mode,
+294 |         "files_processed": parsed_count,
+    |
+help: Convert to `datetime.UTC` alias
+
+UP017 [*] Use `datetime.UTC` alias
+   --> src\anythink\rag\ingestion.py:307:35
+    |
+305 |     updated_info = replace(
+306 |         info,
+307 |         last_indexed=datetime.now(timezone.utc),
+    |                                   ^^^^^^^^^^^^
+308 |         file_count=parsed_count,
+309 |         chunk_count=store.count(),
+    |
+help: Convert to `datetime.UTC` alias
+
+Found 3 errors.
+[*] 3 fixable with the `--fix` option.

@@ -6,7 +6,7 @@ import re
 import time
 from typing import TYPE_CHECKING
 
-from anythink.exceptions import BrowseError
+from anythink.exceptions import BrowseError, SearchError
 from anythink.tools.base import BaseTool, ToolResult
 
 if TYPE_CHECKING:
@@ -89,16 +89,27 @@ class BrowseFetcher:
         self._preferred_search = preferred_search
 
     async def fetch_snippets(self, query: str) -> list[tuple[str, str]]:
-        """Return (title, snippet) pairs from the active search backend."""
+        """Return (title, snippet) pairs from the active search backend.
+
+        Raises ``SearchError`` if no backend is available or the search fails,
+        so callers can surface the problem to the user.
+        """
         if self._search_registry is None:
-            return []
+            raise SearchError(
+                "No search registry configured.",
+                user_message=(
+                    "Web search is not configured. Install a backend: pip install anythink[search]"
+                ),
+            )
         backend = self._search_registry.get_available(self._preferred_search)
         if backend is None:
-            return []
-        try:
-            results = await backend.search(query)
-        except Exception:
-            return []
+            raise SearchError(
+                "No search backend available.",
+                user_message=(
+                    "No search backend available. Install one with: pip install anythink[search]"
+                ),
+            )
+        results = await backend.search(query)
         return [(r.title, r.snippet or "") for r in results if r.snippet]
 
     async def fetch_page(self, url: str) -> str:
@@ -151,7 +162,15 @@ class BrowseTool(BaseTool):
             )
 
         if query:
-            pairs = await self._fetcher.fetch_snippets(query)
+            try:
+                pairs = await self._fetcher.fetch_snippets(query)
+            except SearchError as exc:
+                return ToolResult(
+                    tool_name=self.name,
+                    stderr=exc.user_message,
+                    exit_code=1,
+                    duration_s=round(time.monotonic() - t0, 3),
+                )
             if not pairs:
                 return ToolResult(
                     tool_name=self.name,

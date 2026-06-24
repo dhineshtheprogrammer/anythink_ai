@@ -20,7 +20,7 @@ from anythink.app.chat import (
 from anythink.bookmarks.manager import BookmarkManager
 from anythink.branch.manager import BranchManager
 from anythink.commands.registry import CommandRegistry
-from anythink.exceptions import AnythinkError, SearchError, ToolExecutionError, VoiceError
+from anythink.exceptions import AnythinkError, RAGError, SearchError, ToolExecutionError, VoiceError
 from anythink.files.reader import ImageAttachment, TextAttachment
 from anythink.notify.notifier import SLOW_EXEC_S, SLOW_RESPONSE_S
 from anythink.providers.base import ChatMessage, ContentPart, TextPart
@@ -1339,6 +1339,36 @@ class AnythinkApp(App[int]):
         if result.action == "rag_hud_update" and self._state is not None:
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
+        if result.action == "rag_settings_open":
+            # Phase 7: will open the interactive RAG settings panel
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "rag_index_wizard":
+            # Phase 7: will launch the 8-step new-index wizard
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action == "rag_benchmark":
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
+        if result.action.startswith("rag_ingest_start:") and self._state is not None:
+            # Format: rag_ingest_start:<name>:<mode>[:<extra_path>]
+            parts = result.action.split(":", 3)
+            index_name = parts[1] if len(parts) > 1 else ""
+            ingest_mode = parts[2] if len(parts) > 2 else "incremental"
+            if index_name:
+                self.run_worker(
+                    self._run_rag_ingest(index_name, ingest_mode),
+                    exclusive=False,
+                    exit_on_error=False,
+                )
+            return
+
         if result.action == "voice_request":
             await self._start_voice_recording()
             return
@@ -1513,9 +1543,7 @@ class AnythinkApp(App[int]):
             lines = [f"Model Capability Registry  ({len(caps)} entries)", ""]
             for cap in caps[:20]:
                 strengths = ", ".join(cap.strength_categories[:3]) or "general"
-                lines.append(
-                    f"  {cap.id:<42} {cap.tier:<10} {cap.speed_class:<7} {strengths}"
-                )
+                lines.append(f"  {cap.id:<42} {cap.tier:<10} {cap.speed_class:<7} {strengths}")
             if len(caps) > 20:
                 lines.append(f"  … and {len(caps) - 20} more")
             conv.add_bubble(SystemBubble("\n".join(lines), t, kind="info"))
@@ -1659,36 +1687,72 @@ class AnythinkApp(App[int]):
                     try:
                         if dm.is_active() and _debug_record is not None:
                             _debug_record.t_rag_start = time.monotonic()
-                            _rag_top_k = 10  # extra results for the chunk inspector
+                            _rag_top_k = self._ctx.config.rag_top_k + 7  # extra for inspector
                         else:
-                            _rag_top_k = 5
+                            _rag_top_k = self._ctx.config.rag_top_k
 
                         def _rag_debug_cb(emb_ms: float, candidates: int) -> None:
                             if _debug_record is not None:
                                 _debug_record.rag_embedding_ms = emb_ms
                                 _debug_record.rag_candidates_evaluated = candidates
 
+                        def _rag_stage_cb(stage: str) -> None:
+                            if thinking is not None:
+                                thinking.set_context(stage)
+
+                        async def _rag_expand_fn(short_query: str) -> str:
+                            """Single-turn LLM call to expand a terse query."""
+                            try:
+                                expanded_parts: list[str] = []
+                                expand_prompt = (
+                                    f"Rephrase this search query more descriptively "
+                                    f"in one sentence: {short_query}"
+                                )
+                                async for token in state.provider.stream_chat(
+                                    messages=[
+                                        {
+                                            "role": "user",
+                                            "content": expand_prompt,
+                                        }
+                                    ],
+                                    model_id=state.model_id,
+                                    api_key=state.api_key,
+                                    max_tokens=60,
+                                ):
+                                    expanded_parts.append(token)
+                                return "".join(expanded_parts).strip()
+                            except Exception:
+                                return short_query
+
                         rag_results = await rag_mgr.retrieve(
                             query,
                             emb,
                             top_k=_rag_top_k,
                             debug_callback=_rag_debug_cb if dm.is_active() else None,
+                            stage_callback=_rag_stage_cb,
+                            llm_expand_fn=_rag_expand_fn,
                         )
+                        _rag_threshold = self._ctx.config.rag_threshold
                         if dm.is_active() and _debug_record is not None:
                             _debug_record.t_rag_end = time.monotonic()
                             _debug_record.rag_results = list(rag_results)
                             if _debug_panel is not None:
-                                n = sum(1 for r in rag_results if r.relevance >= 0.70)
+                                n = sum(1 for r in rag_results if r.relevance >= _rag_threshold)
                                 await _debug_panel.append_event(
-                                    f"RAG retrieved {n} chunks",
+                                    f"RAG retrieved {n} chunks above threshold",
                                     f"{_debug_record.rag_duration_ms():.0f}ms",
                                 )
 
-                        # Only inject the top 5 into context
-                        inject_results = rag_results[:5]
+                        # Inject top-k chunks that pass the relevance threshold
+                        inject_results = [
+                            r
+                            for r in rag_results[: self._ctx.config.rag_top_k]
+                            if r.relevance >= _rag_threshold
+                        ]
                         if inject_results:
                             context_parts = "\n\n".join(
-                                f"[Source: {r.source_path}]\n{r.chunk_text}" for r in inject_results
+                                f"[Source: {r.source_label()}]\n{r.chunk_text}"
+                                for r in inject_results
                             )
                             state.history[-1] = ChatMessage(
                                 role="user",
@@ -1720,16 +1784,30 @@ class AnythinkApp(App[int]):
                                     f"{_debug_record.search_duration_ms():.0f}ms",
                                 )
                         if results:
+                            _last_msg = state.history[-1]
+                            _existing = (
+                                _last_msg.content
+                                if isinstance(_last_msg.content, list)
+                                else [TextPart(_last_msg.content)]
+                            )
                             state.history[-1] = ChatMessage(
                                 role="user",
                                 content=[
                                     TextPart(_format_search_results(results, query)),
-                                    TextPart(query),
+                                    *_existing,
                                 ],
                             )
-                    except SearchError:
+                    except SearchError as _se:
                         if dm.is_active() and _debug_record is not None:
                             _debug_record.t_search_end = time.monotonic()
+                        _sc = self.query_one(ConversationView)
+                        _sc.add_bubble(
+                            SystemBubble(
+                                f"Web search failed: {_se.user_message}",
+                                self._ctx.theme,
+                                kind="warning",
+                            )
+                        )
 
             # ── Debug: prompt assembled ────────────────────────────────────
             if dm.is_active() and _debug_record is not None:
@@ -1938,37 +2016,100 @@ class AnythinkApp(App[int]):
                 _timer = get_icon("timer", self._ctx.config)
                 bubble.set_debug_footer(f"  {_timer} " + " · ".join(_footer_parts))
 
-    async def _rebuild_rag_index(self, index_name: str) -> None:
-        """Background worker: rebuild a named RAG index."""
+    async def _run_rag_ingest(self, index_name: str, mode: str = "incremental") -> None:
+        """Background worker: run the 6-stage ingestion pipeline with live progress."""
+        from anythink.rag.ingestion import IngestionProgress, run_ingestion
+
         t = self._ctx.theme
         conv = self.query_one(ConversationView)
+
         emb = self._ctx.embedding_registry.get_available(self._ctx.config.embedding_backend)
         if emb is None:
             conv.add_bubble(
                 SystemBubble(
-                    "No embedding backend available. Install anythink[rag].", t, kind="error"
+                    "No embedding backend available. Install anythink[rag].",
+                    t,
+                    kind="error",
                 )
             )
             return
-        try:
-            info = await self._ctx.rag_manager.build_index(index_name, emb)
-            conv.add_bubble(
-                SystemBubble(
-                    f"\U0001f4da Index '{index_name}' rebuilt: "
-                    f"{info.chunk_count:,} chunks from {info.file_count} files.",
-                    t,
-                    kind="success",
+
+        progress_bubble = SystemBubble(
+            f"Starting {mode} ingestion of '{index_name}'…",
+            t,
+            kind="rag",
+            config=self._ctx.config,
+        )
+        conv.add_bubble(progress_bubble)
+
+        def _fmt_progress(prog: IngestionProgress) -> str:
+            files_to_do = prog.files_new + prog.files_changed
+            bar_width = 16
+            if prog.chunks_total > 0:
+                filled = int(bar_width * prog.chunks_embedded / max(1, prog.chunks_total))
+                bar = "█" * filled + "░" * (bar_width - filled)
+                pct = prog.chunks_embedded / max(1, prog.chunks_total) * 100
+                chunk_line = (
+                    f"\n  Chunks: {prog.chunks_embedded}/{prog.chunks_total}"
+                    f"  |{bar}| {pct:.0f}%"
                 )
+            else:
+                chunk_line = ""
+            elapsed = (
+                f"{prog.elapsed_s:.0f}s" if prog.elapsed_s < 60 else f"{prog.elapsed_s / 60:.1f}m"
             )
-            if self._state is not None:
-                self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
-            self._ctx.notifier.notify(
-                "rag_build_done",
-                "Anythink — RAG Build Complete",
-                f"'{index_name}': {info.chunk_count:,} chunks.",
+            eta = f"  ETA: {prog.eta_s:.0f}s" if prog.eta_s is not None else ""
+            file_note = f"  ({prog.current_file})" if prog.current_file else ""
+            return (
+                f"⚙ Ingesting '{index_name}'  [{mode}]\n"
+                f"  Stage {prog.stage}/6: {prog.stage_name}{file_note}\n"
+                f"  Files: {prog.files_total}"
+                f"  ({prog.files_new} new, {prog.files_changed} changed,"
+                f" {prog.files_unchanged} unchanged)\n"
+                f"  Parsed: {prog.files_parsed}/{files_to_do or prog.files_parsed}"
+                f"  Failed: {prog.files_failed}"
+                f"{chunk_line}\n"
+                f"  Elapsed: {elapsed}{eta}"
             )
-        except Exception as exc:  # nosec B110 - rebuild errors surfaced to user
-            conv.add_bubble(SystemBubble(f"Rebuild failed: {exc}", t, kind="error"))
+
+        def _on_progress(prog: IngestionProgress) -> None:
+            progress_bubble.set_message(_fmt_progress(prog))
+
+        try:
+            result = await run_ingestion(
+                index_name,
+                self._ctx.rag_manager,
+                emb,
+                mode=mode,  # type: ignore[arg-type]
+                progress_callback=_on_progress,
+            )
+        except RAGError as exc:
+            progress_bubble.set_message(f"Ingestion failed: {exc.user_message}")
+            return
+        except Exception as exc:
+            progress_bubble.set_message(f"Ingestion error: {exc}")
+            return
+
+        summary = (
+            f"📚 '{index_name}' ingested: "
+            f"{result.chunks_created:,} chunks from {result.files_processed} files"
+            f" in {result.duration_s:.1f}s."
+        )
+        if result.errors:
+            summary += f"\n  ⚠ {len(result.errors)} file(s) had errors and were skipped."
+        progress_bubble.set_message(summary)
+
+        if self._state is not None:
+            self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+        self._ctx.notifier.notify(
+            "rag_build_done",
+            "Anythink — RAG Ingestion Complete",
+            f"'{index_name}': {result.chunks_created:,} chunks.",
+        )
+
+    async def _rebuild_rag_index(self, index_name: str) -> None:
+        """Background worker: full rebuild — delegates to the ingestion pipeline."""
+        await self._run_rag_ingest(index_name, mode="full")
 
     async def _run_exec_tool(self, language: str, code: str) -> None:
         """Background worker: execute code and feed result to the AI."""
@@ -2542,8 +2683,7 @@ class AnythinkApp(App[int]):
 
         # 6. Routing decision
         hist_tokens = sum(
-            len(m.content if isinstance(m.content, str) else "") // 4
-            for m in relevant_history
+            len(m.content if isinstance(m.content, str) else "") // 4 for m in relevant_history
         )
         try:
             routing_decision = self._ctx.routing_engine.decide(
@@ -2597,9 +2737,7 @@ class AnythinkApp(App[int]):
             try:
                 api_key = self._ctx.key_manager.get_key(provider_name)
                 base_url = self._ctx.config.local_servers.get(provider_name)
-                provider = self._ctx.provider_registry.instantiate(
-                    provider_name, api_key, base_url
-                )
+                provider = self._ctx.provider_registry.instantiate(provider_name, api_key, base_url)
                 return provider, api_model_id
             except Exception:
                 return None

@@ -8,6 +8,9 @@ from anythink.exceptions import SearchError
 from anythink.search.base import BaseSearchBackend, SearchResult
 
 _INSTALL_HINT = "pip install anythink[search]"
+_TIMEOUT_S = 10.0
+_MAX_RETRIES = 2
+_RETRY_DELAY_S = 1.5
 
 
 class DuckDuckGoSearch(BaseSearchBackend):
@@ -33,15 +36,29 @@ class DuckDuckGoSearch(BaseSearchBackend):
                 f"duckduckgo-search not installed. Install with: {_INSTALL_HINT}",
                 user_message=f"DuckDuckGo search requires: {_INSTALL_HINT}",
             )
-        try:
-            return await asyncio.to_thread(self._sync_search, query, max_results)
-        except SearchError:
-            raise
-        except Exception as exc:
-            raise SearchError(
-                f"DuckDuckGo search failed: {exc}",
-                user_message=f"Web search failed: {exc}",
-            ) from exc
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return await asyncio.wait_for(
+                    asyncio.to_thread(self._sync_search, query, max_results),
+                    timeout=_TIMEOUT_S,
+                )
+            except SearchError:
+                raise
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _MAX_RETRIES:
+                    await asyncio.sleep(_RETRY_DELAY_S * (attempt + 1))
+        assert last_exc is not None
+        is_timeout = isinstance(last_exc, TimeoutError)
+        raise SearchError(
+            f"DuckDuckGo search {'timed out' if is_timeout else f'failed after {_MAX_RETRIES + 1} attempts'}: {last_exc}",
+            user_message=(
+                "Web search timed out. DuckDuckGo may be rate-limiting requests."
+                if is_timeout
+                else f"Web search failed after retries: {last_exc}"
+            ),
+        ) from last_exc
 
     def _sync_search(self, query: str, max_results: int) -> list[SearchResult]:
         from duckduckgo_search import DDGS

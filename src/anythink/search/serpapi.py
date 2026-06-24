@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import httpx
-
 from anythink.exceptions import SearchError
 from anythink.search.base import BaseSearchBackend, SearchResult
 
@@ -28,6 +26,13 @@ class SerpAPISearch(BaseSearchBackend):
                 "SerpAPI key not configured.",
                 user_message="SerpAPI key not set. Add it with: anythink keys add serpapi",
             )
+        try:
+            import httpx
+        except ImportError as exc:
+            raise SearchError(
+                "httpx not installed.",
+                user_message="httpx is required for SerpAPI search. Run: pip install httpx",
+            ) from exc
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 resp = await client.get(

@@ -433,6 +433,11 @@ class SystemBubble(Static):
         self._config = config
         self._rebuild()
 
+    def set_message(self, message: str) -> None:
+        """Update displayed message in-place (used for live progress bubbles)."""
+        self._message = message
+        self._rebuild()
+
     def _rebuild(self) -> None:
         t = self._theme
         cfg = self._config

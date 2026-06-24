@@ -50,6 +50,14 @@ class AppConfig:
     debug_level: int = 2  # 1 | 2 | 3
     debug_api_logging: bool = False
 
+    # --- RAG V2 fields ---
+    rag_threshold: float = 0.65  # minimum relevance score for chunk injection
+    rag_top_k: int = 3  # chunks retrieved per query (default)
+    rag_reranking: bool = False  # cross-encoder re-ranking on/off
+    rag_retrieval_strategy: str = "vector"  # "vector"|"bm25"|"hybrid"|"mmr"
+    rag_quality_indicators: bool = True  # show confidence scores in response footer
+    rag_confidence_display: bool = True  # show per-chunk relevance in expanded view
+
     # --- V4 MMOS fields (mmos_enabled=False preserves pure V3 behaviour) ---
     mmos_enabled: bool = False
     mmos_mode: str = "auto"  # "online" | "offline" | "auto"

@@ -97,6 +97,35 @@ class VectorStore:
     def count(self) -> int:
         return len(self._chunks)
 
+    def query_ranked(
+        self,
+        query_vector: list[float],
+        *,
+        top_k: int = 5,
+    ) -> list[tuple[int, float]]:
+        """Return ``(chunk_index, cosine_score)`` pairs, sorted descending.
+
+        Used by the retrieval module for vector, hybrid, and MMR strategies.
+        """
+        if not self._chunks:
+            return []
+        scored = [(_cosine(query_vector, c.vector), i) for i, c in enumerate(self._chunks)]
+        scored.sort(key=lambda t: t[0], reverse=True)
+        return [(idx, score) for score, idx in scored[:top_k]]
+
+    def get_chunk_at(self, idx: int) -> tuple[str, dict[str, Any]]:
+        """Return ``(text, metadata)`` for the chunk at *idx*."""
+        c = self._chunks[idx]
+        return c.text, c.metadata
+
+    def get_vector_at(self, idx: int) -> list[float]:
+        """Return the embedding vector for the chunk at *idx*."""
+        return self._chunks[idx].vector
+
+    def all_texts(self) -> list[str]:
+        """Return all chunk texts in store order (for BM25 corpus building)."""
+        return [c.text for c in self._chunks]
+
     # ── persistence ────────────────────────────────────────────────────────
 
     def persist(self, path: Path) -> None:

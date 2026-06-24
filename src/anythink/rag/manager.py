@@ -8,11 +8,14 @@ from typing import TYPE_CHECKING
 import yaml
 
 from anythink.exceptions import RAGError
+from anythink.rag.bm25 import BM25Index
 from anythink.rag.chunkers import chunk_file
 from anythink.rag.models import IndexInfo, RetrievalResult
 from anythink.rag.store import VectorStore
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from anythink.embeddings.base import BaseEmbeddingBackend
 
 # Extensions to index for "project" (code) type indexes
@@ -58,6 +61,8 @@ class RAGManager:
         self._cache_dir = cache_dir
         self._active_info: IndexInfo | None = None
         self._active_store: VectorStore | None = None
+        self._active_bm25: BM25Index | None = None
+        self._last_results: list[RetrievalResult] = []
 
     # ── lifecycle ──────────────────────────────────────────────────────────
 
@@ -113,9 +118,42 @@ class RAGManager:
             )
         meta.unlink(missing_ok=True)
         self._store_path(name).unlink(missing_ok=True)
+        self._bm25_path(name).unlink(missing_ok=True)
         if self._active_info and self._active_info.name == name:
             self._active_info = None
             self._active_store = None
+            self._active_bm25 = None
+
+    def rename_index(self, old_name: str, new_name: str) -> None:
+        """Rename an index — updates metadata name, renames files on disk."""
+        old_meta = self._meta_path(old_name)
+        new_meta = self._meta_path(new_name)
+        if not old_meta.exists():
+            raise RAGError(
+                f"Index '{old_name}' not found.",
+                user_message=f"No RAG index named '{old_name}'.",
+            )
+        if new_meta.exists():
+            raise RAGError(
+                f"Index '{new_name}' already exists.",
+                user_message=f"An index named '{new_name}' already exists.",
+            )
+        info = self.get_info(old_name)
+        if info is None:
+            raise RAGError(f"Could not read metadata for '{old_name}'.")
+        from dataclasses import replace as _replace
+
+        new_info = _replace(info, name=new_name)
+        self.create_index(new_info)
+        old_store = self._store_path(old_name)
+        if old_store.exists():
+            old_store.rename(self._store_path(new_name))
+        old_bm25 = self._bm25_path(old_name)
+        if old_bm25.exists():
+            old_bm25.rename(self._bm25_path(new_name))
+        old_meta.unlink(missing_ok=True)
+        if self._active_info and self._active_info.name == old_name:
+            self._active_info = new_info
 
     # ── build / rebuild ────────────────────────────────────────────────────
 
@@ -196,12 +234,20 @@ class RAGManager:
             # until the user runs /rag rebuild <name>
             self._active_store = VectorStore()
 
+        # Load BM25 index if persisted (available after first ingestion with persist mode)
+        bm25_path = self._bm25_path(name)
+        if bm25_path.exists():
+            self._active_bm25 = BM25Index.load(bm25_path)
+        else:
+            self._active_bm25 = None
+
         self._active_info = info
         return True
 
     def deactivate(self) -> None:
         self._active_info = None
         self._active_store = None
+        self._active_bm25 = None
 
     # ── retrieval ──────────────────────────────────────────────────────────
 
@@ -211,26 +257,81 @@ class RAGManager:
         backend: BaseEmbeddingBackend,
         *,
         top_k: int = 5,
-        debug_callback: object = None,
+        debug_callback: Callable[[float, int], None] | None = None,
+        stage_callback: Callable[[str], None] | None = None,
+        llm_expand_fn: Callable[[str], object] | None = None,
     ) -> list[RetrievalResult]:
-        """Retrieve the most relevant chunks for *query* from the active store."""
-        import time as _time
+        """Retrieve chunks using the active index's configured strategy.
+
+        Uses the retrieval strategy, BM25 index, and re-ranker configured in
+        the active ``IndexInfo``.  Falls back to pure vector search if BM25 or
+        the re-ranker is unavailable.
+
+        Args:
+            query:           User query text.
+            backend:         Embedding backend for query vectorisation.
+            top_k:           Maximum results to return.
+            debug_callback:  Called with (emb_ms, candidates) for debug tracing.
+            stage_callback:  Called with stage label strings for UI updates.
+            llm_expand_fn:   Async callable for short-query expansion.
+        """
+        from anythink.rag.retrieval import retrieve as _retrieve
 
         if self._active_store is None or self._active_store.count() == 0:
             return []
 
-        t_emb_start = _time.monotonic()
-        vecs = await backend.embed([query])
-        emb_ms = (_time.monotonic() - t_emb_start) * 1000
-        candidates = self._active_store.count()
+        info = self._active_info
+        strategy = info.retrieval_strategy if info else "vector"
+        reranking = info.reranking_enabled if info else False
+        reranking_model = info.reranking_model if info else "bge-reranker-base"
 
-        if debug_callback is not None and callable(debug_callback):
-            import contextlib
+        # Resolve reranker (lazy — None if deps missing)
+        reranker = None
+        if reranking:
+            from anythink.rag.reranker import get_reranker
 
-            with contextlib.suppress(Exception):
-                debug_callback(emb_ms, candidates)
+            reranker = get_reranker(reranking_model)
 
-        return self._active_store.query(vecs[0], top_k=top_k)
+        results = await _retrieve(
+            query=query,
+            backend=backend,
+            store=self._active_store,
+            bm25=self._active_bm25,
+            strategy=strategy,
+            top_k=top_k,
+            reranker=reranker,
+            rerank_candidates=max(20, top_k * 5),
+            llm_expand_fn=llm_expand_fn,
+            stage_callback=stage_callback,
+            debug_callback=debug_callback,
+        )
+
+        self._last_results = results
+        return results
+
+    # ── pipeline ───────────────────────────────────────────────────────────
+
+    async def run_ingestion_pipeline(
+        self,
+        name: str,
+        backend: BaseEmbeddingBackend,
+        *,
+        mode: str = "incremental",
+        extra_path: Path | None = None,
+        progress_callback: object = None,
+    ) -> object:
+        """Run the full 6-stage ingestion pipeline and return an IngestionResult."""
+        from anythink.rag.ingestion import IngestionResult, run_ingestion
+
+        result: IngestionResult = await run_ingestion(
+            name,
+            self,
+            backend,
+            mode=mode,  # type: ignore[arg-type]
+            extra_path=extra_path,
+            progress_callback=progress_callback,  # type: ignore[arg-type]
+        )
+        return result
 
     # ── helpers ────────────────────────────────────────────────────────────
 
@@ -241,3 +342,7 @@ class RAGManager:
     def _store_path(self, name: str) -> Path:
         safe = name.replace(" ", "_").replace("/", "_")
         return self._cache_dir / f"{safe}.store.gz"
+
+    def _bm25_path(self, name: str) -> Path:
+        safe = name.replace(" ", "_").replace("/", "_")
+        return self._cache_dir / f"{safe}.bm25.gz"

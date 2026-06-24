@@ -44,7 +44,12 @@ mistral = ["mistralai>=1.0"]
 cohere = ["cohere>=5.0"]
 search = ["duckduckgo-search>=6.0"]
 # --- V2 capability extras (heavy deps, lazy-imported) ---
-rag = ["sentence-transformers>=2.7", "chromadb>=0.5"]
+rag = [
+    "sentence-transformers>=2.7",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+]
+rag-ocr = ["pytesseract>=0.3", "Pillow>=10.0"]
 voice = ["openai-whisper>=20231117", "sounddevice>=0.4"]
 browser = ["playwright>=1.44"]
 mcp = ["mcp>=1.0"]
@@ -60,7 +65,8 @@ all = [
     "cohere>=5.0",
     "duckduckgo-search>=6.0",
     "sentence-transformers>=2.7",
-    "chromadb>=0.5",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
     "openai-whisper>=20231117",
     "sounddevice>=0.4",
     "playwright>=1.44",
