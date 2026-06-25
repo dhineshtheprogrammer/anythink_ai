@@ -208,6 +208,11 @@ def validate_config(raw: dict[str, Any]) -> list[ConfigError]:
                 ConfigError(f"Invalid '{name}' value '{val}'. Allowed: {sorted(allowed)}")
             )
 
+    for int_field, min_val in (("windows_screenshot_max_px", 1), ("windows_apps_cache_ttl_minutes", 1)):
+        val = raw.get(int_field)
+        if val is not None and (not isinstance(val, int) or val < min_val):
+            errors.append(ConfigError(f"'{int_field}' must be a positive integer, got {val!r}"))
+
     return errors
 
 
@@ -248,6 +253,22 @@ class ConfigManager:
         mmos_fallback_raw = raw.get("mmos_fallback_order", [])
         mmos_fallback: tuple[str, ...] = (
             tuple(str(x) for x in mmos_fallback_raw) if isinstance(mmos_fallback_raw, list) else ()
+        )
+        windows_allowed_raw = raw.get("windows_allowed_paths", [])
+        windows_blocked_raw = raw.get("windows_blocked_paths", [])
+        windows_blocked_apps_raw = raw.get(
+            "windows_blocked_apps", ["regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe"]
+        )
+        windows_allowed: tuple[str, ...] = (
+            tuple(str(p) for p in windows_allowed_raw) if isinstance(windows_allowed_raw, list) else ()
+        )
+        windows_blocked: tuple[str, ...] = (
+            tuple(str(p) for p in windows_blocked_raw) if isinstance(windows_blocked_raw, list) else ()
+        )
+        windows_blocked_apps: tuple[str, ...] = (
+            tuple(str(a) for a in windows_blocked_apps_raw)
+            if isinstance(windows_blocked_apps_raw, list)
+            else ("regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe")
         )
         return AppConfig(
             default_model_alias=raw.get("default_model_alias"),
@@ -297,6 +318,17 @@ class ConfigManager:
             mmos_plan_mode=bool(raw.get("mmos_plan_mode", True)),
             mmos_orchestration=str(raw.get("mmos_orchestration", "auto")),
             mmos_fallback_order=mmos_fallback,
+            # Windows MCP fields
+            windows_enabled=bool(raw.get("windows_enabled", False)),
+            windows_gui_mode=bool(raw.get("windows_gui_mode", False)),
+            windows_allowed_paths=windows_allowed,
+            windows_blocked_paths=windows_blocked,
+            windows_blocked_apps=windows_blocked_apps,
+            windows_audit_log_enabled=bool(raw.get("windows_audit_log_enabled", True)),
+            windows_audit_log_path=str(raw.get("windows_audit_log_path", "")),
+            windows_screenshot_max_px=int(raw.get("windows_screenshot_max_px", 1920)),
+            windows_notification_app_name=str(raw.get("windows_notification_app_name", "Anythink")),
+            windows_apps_cache_ttl_minutes=int(raw.get("windows_apps_cache_ttl_minutes", 60)),
         )
 
     def save(self, config: AppConfig) -> None:
@@ -360,5 +392,21 @@ class ConfigManager:
         data["mmos_orchestration"] = config.mmos_orchestration
         if config.mmos_fallback_order:
             data["mmos_fallback_order"] = list(config.mmos_fallback_order)
+
+        # Windows MCP fields
+        data["windows_enabled"] = config.windows_enabled
+        data["windows_gui_mode"] = config.windows_gui_mode
+        data["windows_audit_log_enabled"] = config.windows_audit_log_enabled
+        data["windows_screenshot_max_px"] = config.windows_screenshot_max_px
+        data["windows_notification_app_name"] = config.windows_notification_app_name
+        data["windows_apps_cache_ttl_minutes"] = config.windows_apps_cache_ttl_minutes
+        if config.windows_allowed_paths:
+            data["windows_allowed_paths"] = list(config.windows_allowed_paths)
+        if config.windows_blocked_paths:
+            data["windows_blocked_paths"] = list(config.windows_blocked_paths)
+        if config.windows_blocked_apps != ("regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe"):
+            data["windows_blocked_apps"] = list(config.windows_blocked_apps)
+        if config.windows_audit_log_path:
+            data["windows_audit_log_path"] = config.windows_audit_log_path
 
         self.paths.config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=True))

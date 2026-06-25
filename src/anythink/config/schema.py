@@ -74,6 +74,24 @@ class AppConfig:
     mmos_orchestration: str = "auto"  # "deterministic" | "meta_llm" | "auto"
     mmos_fallback_order: tuple[str, ...] = field(default_factory=tuple)
 
+    # --- Windows MCP fields (windows_enabled=False is a no-op on all platforms) ---
+    windows_enabled: bool = False
+    windows_gui_mode: bool = False
+    # Empty tuples → WindowsPathGuard populates OS-appropriate defaults at init
+    windows_allowed_paths: tuple[str, ...] = field(default_factory=tuple)
+    windows_blocked_paths: tuple[str, ...] = field(default_factory=tuple)
+    windows_blocked_apps: tuple[str, ...] = (
+        "regedit.exe",
+        "cmd.exe",
+        "powershell.exe",
+        "mmc.exe",
+    )
+    windows_audit_log_enabled: bool = True
+    windows_audit_log_path: str = ""  # empty → use XDG state dir default
+    windows_screenshot_max_px: int = 1920
+    windows_notification_app_name: str = "Anythink"
+    windows_apps_cache_ttl_minutes: int = 60
+
     VALID_THEMES: frozenset[str] = field(
         default=frozenset(
             {

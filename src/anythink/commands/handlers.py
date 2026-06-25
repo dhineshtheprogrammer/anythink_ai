@@ -120,7 +120,7 @@ def register_commands(registry: CommandRegistry) -> None:
             "mcp",
             "Manage MCP servers and call tools",
             _mcp,
-            "/mcp list|tools|connect|disconnect|status|call|server",
+            "/mcp list|tools|connect|disconnect|status|call|server|windows",
         )
     )
     registry.register(
@@ -1396,7 +1396,6 @@ async def _rag(
         total = store.count() if store else 0
         if total == 0:
             return CommandResult(error=True, message="Index is empty — run /rag ingest first.")
-        import math as _math
         import time as _time
 
         sample_indices = [
@@ -1715,6 +1714,10 @@ async def _mcp(
             extra={"tool": tool_name, **arguments},
         )
 
+    # /mcp windows <sub-command>
+    if sub == "windows":
+        return await _mcp_windows(ctx, rest, state)
+
     # /mcp server <start|stop|status>
     if sub == "server":
         server_parts = rest.split(None, 1)
@@ -1750,7 +1753,262 @@ async def _mcp(
 
     return CommandResult(
         error=True,
-        message="Usage: /mcp list|tools|connect|disconnect|status|call|server",
+        message="Usage: /mcp list|tools|connect|disconnect|status|call|server|windows",
+    )
+
+
+# ── Windows MCP sub-namespace ──────────────────────────────────────────────────
+
+
+async def _mcp_windows(
+    ctx: AppContext,
+    args: str,
+    state: ChatState,
+) -> CommandResult:
+    """Dispatch /mcp windows <sub-command>."""
+    from dataclasses import replace as _replace
+
+    parts = args.strip().split(None, 1)
+    sub = parts[0].lower() if parts else "status"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    mgr = ctx.mcp_manager
+
+    # Helper: access a Windows builtin server by its registered name
+    def _win_server(name: str):  # type: ignore[return]
+        return mgr._builtins.get(name)  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------------ status
+    if sub in ("status", ""):
+        if not ctx.config.windows_enabled:
+            return CommandResult(
+                message=(
+                    "Windows MCP integration is disabled.\n"
+                    "Enable it with: /settings → Windows → Enable  or  set windows_enabled=true in config."
+                )
+            )
+        win_servers = [s for s in mgr.list_servers() if s.name.startswith("windows-")]
+        lines = [
+            f"Windows MCP: enabled  ({len(win_servers)} servers, "
+            f"{sum(s.tool_count for s in win_servers)} tools)",
+            "─" * 60,
+        ]
+        for s in win_servers:
+            lines.append(f"  ● {s.name:<26} {s.tool_count} tool(s)")
+        if not win_servers:
+            lines.append("  No Windows servers registered.")
+        return CommandResult(message="\n".join(lines))
+
+    # --------------------------------------------------------------------- mode
+    if sub == "mode":
+        if rest in ("gui", "headless"):
+            new_cfg = _replace(ctx.config, windows_gui_mode=(rest == "gui"))
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
+            return CommandResult(message=f"Windows mode set to: {rest}")
+        return CommandResult(error=True, message="Usage: /mcp windows mode gui|headless")
+
+    # ------------------------------------------------------------------- paths
+    if sub == "paths":
+        path_parts = rest.split(None, 1)
+        path_sub = path_parts[0].lower() if path_parts else "list"
+        path_arg = path_parts[1].strip() if len(path_parts) > 1 else ""
+
+        fs_srv = _win_server("windows-filesystem")
+        guard = getattr(fs_srv, "_path_guard", None)
+
+        if path_sub == "list":
+            if guard is None:
+                return CommandResult(message="Windows Filesystem server not active.")
+            lines = ["Allowed paths:", *[f"  {p}" for p in guard.allowed_paths]]
+            lines += ["Blocked paths (user):", *[f"  {p}" for p in guard.blocked_paths]]
+            lines += ["Blocked paths (system — permanent):", *[f"  {p}" for p in guard.system_blocked_paths]]
+            return CommandResult(message="\n".join(lines))
+
+        if path_sub == "allow" and path_arg:
+            if guard:
+                guard.add_allowed(path_arg)
+                new_cfg = _replace(ctx.config, windows_allowed_paths=tuple(guard.allowed_paths))
+                ctx.config_manager.save(new_cfg)
+                ctx.config = new_cfg
+            return CommandResult(message=f"Added to allowed paths: {path_arg}")
+
+        if path_sub == "remove" and path_arg:
+            if guard:
+                removed = guard.remove_allowed(path_arg)
+                if removed:
+                    new_cfg = _replace(ctx.config, windows_allowed_paths=tuple(guard.allowed_paths))
+                    ctx.config_manager.save(new_cfg)
+                    ctx.config = new_cfg
+                    return CommandResult(message=f"Removed from allowed paths: {path_arg}")
+            return CommandResult(message=f"Path not in allowed list: {path_arg}")
+
+        if path_sub == "block" and path_arg:
+            if guard:
+                guard.add_blocked(path_arg)
+                new_cfg = _replace(ctx.config, windows_blocked_paths=tuple(guard.blocked_paths))
+                ctx.config_manager.save(new_cfg)
+                ctx.config = new_cfg
+            return CommandResult(message=f"Added to blocked paths: {path_arg}")
+
+        if path_sub == "unblock" and path_arg:
+            if guard:
+                removed = guard.remove_blocked(path_arg)
+                if not removed:
+                    return CommandResult(error=True, message=f"Cannot remove '{path_arg}' — not in user blocked list or it is a non-removable system path.")
+                new_cfg = _replace(ctx.config, windows_blocked_paths=tuple(guard.blocked_paths))
+                ctx.config_manager.save(new_cfg)
+                ctx.config = new_cfg
+            return CommandResult(message=f"Removed from blocked paths: {path_arg}")
+
+        return CommandResult(
+            error=True,
+            message="Usage: /mcp windows paths list|allow <path>|remove <path>|block <path>|unblock <path>",
+        )
+
+    # --------------------------------------------------------------------- apps
+    if sub == "apps":
+        app_parts = rest.split(None, 1)
+        app_sub = app_parts[0].lower() if app_parts else ""
+        app_arg = app_parts[1].strip() if len(app_parts) > 1 else ""
+
+        apps_srv = _win_server("windows-apps")
+
+        if not app_sub:
+            result = await mgr.call_tool("list_installed_apps", {})
+            return CommandResult(message=result.content, error=result.is_error)
+
+        if app_sub == "refresh":
+            if apps_srv and hasattr(apps_srv, "invalidate_cache"):
+                apps_srv.invalidate_cache()  # type: ignore[union-attr]
+            return CommandResult(message="Installed apps cache cleared. Next call will rebuild it.")
+
+        if app_sub == "block" and app_arg:
+            new_apps = ctx.config.windows_blocked_apps + (app_arg.lower(),)
+            new_cfg = _replace(ctx.config, windows_blocked_apps=new_apps)
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
+            return CommandResult(message=f"'{app_arg}' added to blocked apps list.")
+
+        if app_sub == "unblock" and app_arg:
+            blocked = tuple(a for a in ctx.config.windows_blocked_apps if a.lower() != app_arg.lower())
+            new_cfg = _replace(ctx.config, windows_blocked_apps=blocked)
+            ctx.config_manager.save(new_cfg)
+            ctx.config = new_cfg
+            return CommandResult(message=f"'{app_arg}' removed from blocked apps list.")
+
+        return CommandResult(
+            error=True,
+            message="Usage: /mcp windows apps [refresh|block <name>|unblock <name>]",
+        )
+
+    # ------------------------------------------------------------------- audit
+    if sub == "audit":
+        # Parse flags: --n N, --tool NAME, --date today, --export, clear
+        audit_obj = None
+        for srv_name in ("windows-filesystem", "windows-system", "windows-clipboard"):
+            srv = _win_server(srv_name)
+            if srv and hasattr(srv, "_audit"):
+                audit_obj = srv._audit  # type: ignore[union-attr]
+                break
+
+        if rest == "clear":
+            return CommandResult(
+                message=(
+                    "Clear the entire Windows audit log? "
+                    "This cannot be undone. Type 'yes' to confirm."
+                ),
+                action="windows_audit_clear_confirm",
+                extra={"audit_obj": audit_obj},
+            )
+
+        n = 20
+        tool_filter = None
+        date_filter = None
+        do_export = False
+
+        flag_parts = rest.split()
+        i = 0
+        while i < len(flag_parts):
+            if flag_parts[i] == "--n" and i + 1 < len(flag_parts):
+                try:
+                    n = int(flag_parts[i + 1])
+                except ValueError:
+                    pass
+                i += 2
+            elif flag_parts[i] == "--tool" and i + 1 < len(flag_parts):
+                tool_filter = flag_parts[i + 1]
+                i += 2
+            elif flag_parts[i] == "--date" and i + 1 < len(flag_parts):
+                date_filter = flag_parts[i + 1]
+                i += 2
+            elif flag_parts[i] == "--export":
+                do_export = True
+                i += 1
+            else:
+                i += 1
+
+        if audit_obj is None:
+            return CommandResult(message="Windows servers not active — no audit log available.")
+
+        if do_export:
+            import time as _time
+            export_path = str(ctx.paths.state_dir / "logs" / f"windows_audit_export_{int(_time.time())}.txt")
+            audit_obj.export_to_text(export_path)
+            return CommandResult(message=f"Audit log exported to: {export_path}")
+
+        records = audit_obj.get_recent(n=n, tool_filter=tool_filter, date_filter=date_filter)
+        if not records:
+            return CommandResult(message="No audit records found.")
+        lines = [f"Audit log (last {len(records)} entries):", "─" * 80]
+        for r in records:
+            ts = r.get("timestamp", "")[:19]
+            lines.append(
+                f"  {ts}  {r.get('server',''):<24} {r.get('tool',''):<28} "
+                f"T{r.get('tier','?')}  {r.get('outcome','')}"
+            )
+        return CommandResult(message="\n".join(lines))
+
+    # ----------------------------------------------------------- quick actions
+    if sub == "screenshot":
+        return CommandResult(
+            message="Taking screenshot…",
+            action="mcp_call_request",
+            extra={"tool": "take_screenshot"},
+        )
+
+    if sub == "clip":
+        clip_parts = rest.split(None, 1)
+        clip_sub = clip_parts[0].lower() if clip_parts else ""
+        clip_text = clip_parts[1] if len(clip_parts) > 1 else ""
+        if clip_sub == "read":
+            result = await mgr.call_tool("read_clipboard", {})
+            return CommandResult(message=result.content, error=result.is_error)
+        if clip_sub == "write":
+            if not clip_text:
+                return CommandResult(error=True, message="Usage: /mcp windows clip write <text>")
+            result = await mgr.call_tool("write_clipboard", {"text": clip_text})
+            return CommandResult(message=result.content, error=result.is_error)
+        return CommandResult(error=True, message="Usage: /mcp windows clip read|write <text>")
+
+    if sub == "notify":
+        if not rest:
+            return CommandResult(error=True, message="Usage: /mcp windows notify <message>")
+        result = await mgr.call_tool(
+            "send_notification",
+            {"title": ctx.config.windows_notification_app_name, "message": rest},
+        )
+        return CommandResult(message=result.content, error=result.is_error)
+
+    return CommandResult(
+        error=True,
+        message=(
+            "Usage: /mcp windows status|mode gui|headless|"
+            "paths list|allow|remove|block|unblock|"
+            "apps [refresh|block|unblock]|"
+            "audit [--n N] [--tool T] [--date today] [--export]|audit clear|"
+            "screenshot|clip read|write|notify <msg>"
+        ),
     )
 
 
