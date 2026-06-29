@@ -144,3 +144,34 @@ class TestNeedsSummarisation:
         settings = OptimizeSettings()
         engine = ContextRelevanceEngine(settings=settings)
         assert not engine.needs_summarisation([], budget=10)
+
+
+# ── Module-level helpers not covered by class tests ─────────────────────────
+
+from anythink.optimize.context_engine import _content_to_text, _cosine_similarity
+
+
+class TestContentToText:
+    def test_string_passthrough(self) -> None:
+        assert _content_to_text("hello world") == "hello world"
+
+    def test_list_of_text_parts(self) -> None:
+        parts = [TextPart(text="foo"), TextPart(text="bar")]
+        result = _content_to_text(parts)
+        assert result == "foo bar"
+
+    def test_list_with_no_text_attr(self) -> None:
+        parts = [object()]
+        result = _content_to_text(parts)
+        assert result == ""
+
+
+class TestCosineSimilarity:
+    def test_empty_lists_return_zero(self) -> None:
+        assert _cosine_similarity([], []) == 0.0
+
+    def test_zero_vector_returns_zero(self) -> None:
+        assert _cosine_similarity([0.0, 0.0], [0.0, 0.0]) == 0.0
+
+    def test_mismatched_lengths_return_zero(self) -> None:
+        assert _cosine_similarity([1.0], [1.0, 2.0]) == 0.0

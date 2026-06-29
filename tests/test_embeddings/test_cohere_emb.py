@@ -91,3 +91,14 @@ class TestCohereEmbed:
             backend = CohereEmbeddingBackend()
             result = await backend.embed(["test"])
         assert result == [[0.5] * 1024]
+
+
+class TestCohereKeyringException:
+    def test_keyring_exception_falls_back_to_env(self) -> None:
+        import os
+
+        env = {k: v for k, v in os.environ.items() if k != "COHERE_API_KEY"}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("keyring.get_password", side_effect=Exception("keyring error")):
+                # No env key → not available (exception was swallowed)
+                assert CohereEmbeddingBackend().is_available() is False

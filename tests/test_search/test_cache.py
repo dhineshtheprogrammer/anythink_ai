@@ -129,3 +129,9 @@ class TestSearchCache:
         got = cache.get("q", "ddg")
         assert got is not None
         assert len(got) == 1
+
+
+class TestCosineSimilarityZeroMagnitude:
+    def test_cosine_zero_magnitude_with_common_key(self) -> None:
+        # Both have common key but value=0 → mag_a=0 → line 42 branch
+        assert _cosine({"x": 0.0}, {"x": 1.0}) == pytest.approx(0.0)

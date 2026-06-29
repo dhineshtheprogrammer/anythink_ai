@@ -14,7 +14,9 @@ from anythink import __version__
 from anythink.app.chat import (
     ChatState,
     _build_session,
-    _format_search_results,
+    _freshness_to_date,
+    _history_context,
+    _inject_search_context,
     _trim_history,
 )
 from anythink.bookmarks.manager import BookmarkManager
@@ -737,8 +739,8 @@ class AnythinkApp(App[int]):
 
     def on_settings_menu_changed(self, event: SettingsMenu.Changed) -> None:
         """Sync runtime state immediately when a config value is saved from settings."""
-        if event.field == "web_search_enabled" and self._state is not None:
-            self._state.search_enabled = self._ctx.config.web_search_enabled
+        if event.field == "search_default_enabled" and self._state is not None:
+            self._state.search_enabled = self._ctx.config.search_default_enabled
 
         if event.field == "active_theme":
             from anythink.ui.theme import get_theme
@@ -805,7 +807,7 @@ class AnythinkApp(App[int]):
         self.query_one(Input).focus()
         if self._state is not None:
             # Final sync: ensure runtime state matches whatever was saved
-            self._state.search_enabled = self._ctx.config.web_search_enabled
+            self._state.search_enabled = self._ctx.config.search_default_enabled
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
     # ── V2.2 visual helpers ────────────────────────────────────────────────────
@@ -1854,7 +1856,9 @@ class AnythinkApp(App[int]):
                                         f"  [3]  Rephrase your query"
                                     )
                                     _conv.add_bubble(
-                                        SystemBubble(_menu, t, kind="warning")
+                                        SystemBubble(
+                                            _menu, self._ctx.theme, kind="warning"
+                                        )
                                     )
                                     self._active_ai_bubble = None
                                     import contextlib as _cl2
@@ -1904,47 +1908,63 @@ class AnythinkApp(App[int]):
                             _debug_record.t_rag_end = time.monotonic()
 
             # ── Web search ─────────────────────────────────────────────────
+            if state.search_enabled and self._ctx.config.search_cache_enabled:
+                self._ctx.search_cache.evict_expired()
+
             if state.search_enabled:
                 if thinking is not None:
                     thinking.set_context("Searching the web…")
-                backend = self._ctx.search_registry.get_available(self._ctx.config.search_provider)
-                if backend is not None:
-                    try:
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_search_start = time.monotonic()
-                        results = await backend.search(query)
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_search_end = time.monotonic()
-                            if _debug_panel is not None:
-                                await _debug_panel.append_event(
-                                    "Web search complete",
-                                    f"{_debug_record.search_duration_ms():.0f}ms",
-                                )
-                        if results:
-                            _last_msg = state.history[-1]
-                            _existing = (
-                                _last_msg.content
-                                if isinstance(_last_msg.content, list)
-                                else [TextPart(_last_msg.content)]
+                _conv = self.query_one(ConversationView)
+                _search_progress = SystemBubble(
+                    "Preparing search…", self._ctx.theme, kind="info", config=self._ctx.config
+                )
+                _conv.add_bubble(_search_progress)
+
+                # 1. Rewrite query
+                _raw_queries: list[str] = [query]
+                if self._ctx.config.search_query_rewrite:
+                    from anythink.search.rewriter import QueryRewriter as _QueryRewriter
+
+                    _rewriter = _QueryRewriter(state.provider, state.model_id)
+                    _raw_queries = await _rewriter.rewrite_multi(
+                        query, _history_context(state)
+                    )
+                    _search_progress.set_message(f"Searching: {_raw_queries[0]!r}")
+
+                # 2. Run orchestrator
+                if dm.is_active() and _debug_record is not None:
+                    _debug_record.t_search_start = time.monotonic()
+                try:
+                    _orch_result = await self._ctx.search_orchestrator.run(
+                        _raw_queries,
+                        date_from=_freshness_to_date(self._ctx.config.search_freshness),
+                        safe_search=self._ctx.config.search_safe_search,
+                        include_domains=list(self._ctx.config.search_include_domains),
+                        exclude_domains=list(self._ctx.config.search_exclude_domains),
+                        news_mode=(state.search_mode == "news"),
+                        progress_cb=lambda msg: _search_progress.set_message(msg),
+                    )
+                    if dm.is_active() and _debug_record is not None:
+                        _debug_record.t_search_end = time.monotonic()
+                        if _debug_panel is not None:
+                            await _debug_panel.append_event(
+                                "Web search complete",
+                                f"{_debug_record.search_duration_ms():.0f}ms",
                             )
-                            state.history[-1] = ChatMessage(
-                                role="user",
-                                content=[
-                                    TextPart(_format_search_results(results, query)),
-                                    *_existing,
-                                ],
-                            )
-                    except SearchError as _se:
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_search_end = time.monotonic()
-                        _sc = self.query_one(ConversationView)
-                        _sc.add_bubble(
-                            SystemBubble(
-                                f"Web search failed: {_se.user_message}",
-                                self._ctx.theme,
-                                kind="warning",
-                            )
+
+                    # 3. Inject into history + update bubble
+                    if _orch_result.results:
+                        _inject_search_context(state, _orch_result.results, query)
+                        _search_progress.set_message(
+                            f"Found {len(_orch_result.results)} results"
+                            f" · {_orch_result.elapsed_s:.1f}s"
                         )
+                    else:
+                        _search_progress.set_message("No search results found.")
+                except SearchError as _se:
+                    if dm.is_active() and _debug_record is not None:
+                        _debug_record.t_search_end = time.monotonic()
+                    _search_progress.set_message(f"Search failed: {_se.user_message}")
 
             # ── Debug: prompt assembled ────────────────────────────────────
             if dm.is_active() and _debug_record is not None:
@@ -2277,7 +2297,7 @@ class AnythinkApp(App[int]):
         elif choice == "2":
             # Show closest matches; transition to override-confirm state
             self._pending_rag_nomatch = None
-            lines = [f"Closest matches (below threshold):"]
+            lines = ["Closest matches (below threshold):"]
             for i, r in enumerate(results[: self._ctx.config.rag_top_k + 2], 1):
                 lines.append(f"  {i}. {r.source_label()}  [{r.relevance:.0%}]")
                 lines.append(f"     {r.excerpt(80)}")
@@ -2570,7 +2590,7 @@ class AnythinkApp(App[int]):
         result = await self._ctx.mcp_manager.call_tool(tool_name, dict(arguments))
 
         header = f"🔌  {tool_name} [{result.server_name}] ({result.duration_s:.3f}s)"
-        preview = result.content[:600] + ("…" if len(result.content) > 600 else "")
+        preview = result.content[:2000] + ("…" if len(result.content) > 2000 else "")
         kind = "error" if result.is_error else "code"
         conv.add_bubble(SystemBubble(f"{header}\n{preview}", t, kind=kind))
         self._log_tool_event(tool_name, result.server_name or "mcp", result.content[:120])
@@ -2582,12 +2602,10 @@ class AnythinkApp(App[int]):
             success=not result.is_error,
         )
 
-        if result.is_error:
-            return
-
         result_ctx = (
-            f"[MCP Tool: {tool_name} on {result.server_name}, {result.duration_s:.3f}s]\n"
-            f"{result.content}"
+            f"[MCP Tool: {tool_name} on {result.server_name}, {result.duration_s:.3f}s"
+            + (" — ERROR" if result.is_error else "")
+            + f"]\n{result.content}"
         )
         self._undo_checkpoints.append(len(state.history))
         state.history.append(ChatMessage(role="user", content=result_ctx))

@@ -25,6 +25,16 @@ class TestExportConfig:
         export_config(ctx, out)
         assert out.exists()
 
+    def test_export_reads_existing_config_file(self, xdg_dirs: Paths, tmp_path: Path) -> None:
+        import yaml
+
+        xdg_dirs.config_file.write_text(yaml.dump({"active_theme": "aurora"}))
+        ctx = _make_ctx(xdg_dirs)
+        out = tmp_path / "backup.json"
+        export_config(ctx, out)
+        data = json.loads(out.read_text())
+        assert data["config"]["active_theme"] == "aurora"
+
     def test_json_has_version_field(self, xdg_dirs: Paths, tmp_path: Path) -> None:
         ctx = _make_ctx(xdg_dirs)
         out = tmp_path / "backup.json"
@@ -79,6 +89,44 @@ class TestImportConfig:
         restored = yaml.safe_load(xdg_dirs.models_file.read_text())
         assert len(restored) == 1
         assert restored[0]["alias"] == "test-model"
+
+    def test_import_invalid_json_type_raises(self, xdg_dirs: Paths, tmp_path: Path) -> None:
+        ctx = _make_ctx(xdg_dirs)
+        bundle_path = tmp_path / "bad.json"
+        bundle_path.write_text(json.dumps([1, 2, 3]))  # a list, not a dict
+        with pytest.raises(ValueError, match="expected a JSON object"):
+            import_config(ctx, bundle_path)
+
+    def test_import_too_new_version_raises(self, xdg_dirs: Paths, tmp_path: Path) -> None:
+        ctx = _make_ctx(xdg_dirs)
+        bundle = {"version": 99, "config": None, "models": None, "personas": None,
+                  "templates": None, "schedules": None}
+        bundle_path = tmp_path / "new.json"
+        bundle_path.write_text(json.dumps(bundle))
+        with pytest.raises(ValueError, match="newer than"):
+            import_config(ctx, bundle_path)
+
+    def test_import_restores_personas_templates_schedules(
+        self, xdg_dirs: Paths, tmp_path: Path
+    ) -> None:
+        import yaml
+
+        ctx = _make_ctx(xdg_dirs)
+        bundle = {
+            "version": 3,
+            "exported_at": "2025-01-01",
+            "config": {"active_theme": "midnight"},
+            "models": None,
+            "personas": [{"name": "test-persona", "content": "You are helpful."}],
+            "templates": [{"name": "t1", "content": "Hello {{name}}"}],
+            "schedules": [{"name": "daily", "cron": "0 8 * * *", "prompt": "hi"}],
+        }
+        bundle_path = tmp_path / "full.json"
+        bundle_path.write_text(json.dumps(bundle))
+        import_config(ctx, bundle_path)
+        assert xdg_dirs.personas_file.exists()
+        assert xdg_dirs.templates_file.exists()
+        assert xdg_dirs.schedules_file.exists()
 
     def test_import_validates_config_section(self, xdg_dirs: Paths, tmp_path: Path) -> None:
         ctx = _make_ctx(xdg_dirs)

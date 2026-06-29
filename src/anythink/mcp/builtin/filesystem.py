@@ -62,10 +62,16 @@ class FilesystemServer(BuiltinMCPServer):
 
     async def _dispatch(self, name: str, arguments: dict[str, Any]) -> str:
         if name == "list_dir":
-            return self._list_dir(str(arguments.get("path", ".")))
+            path = str(arguments.get("path", "")).strip()
+            if not path:
+                raise ValueError("path argument is required. Usage: /mcp call list_dir path=<directory>")
+            return self._list_dir(path)
         if name == "read_file":
+            path = str(arguments.get("path", "")).strip()
+            if not path:
+                raise ValueError("path argument is required. Usage: /mcp call read_file path=<file>")
             max_chars = int(arguments.get("max_chars", _MAX_READ_CHARS))
-            return self._read_file(str(arguments.get("path", "")), max_chars)
+            return self._read_file(path, max_chars)
         raise ValueError(f"Unknown tool '{name}'")
 
     def _list_dir(self, path: str) -> str:
@@ -73,7 +79,7 @@ class FilesystemServer(BuiltinMCPServer):
         if not p.exists():
             raise FileNotFoundError(f"Path not found: {p}")
         if p.is_file():
-            return str(p)
+            raise NotADirectoryError(f"Not a directory: {p}. Use read_file to read a file.")
         entries = sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
         lines = [f"{'[D]' if e.is_dir() else '[F]'} {e.name}" for e in entries]
         return f"{p}\n" + "\n".join(lines)

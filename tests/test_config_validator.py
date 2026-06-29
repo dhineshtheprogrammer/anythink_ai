@@ -150,6 +150,82 @@ def test_schedule_valid_alias():
     assert len(ok) > 0
 
 
+def test_model_aliases_exception_returns_warn():
+    ctx = _make_ctx()
+    ctx.model_registry.list_all.side_effect = RuntimeError("registry unavailable")
+    issues = ConfigValidator()._check_alias_consistency(ctx)
+    warns = [i for i in issues if i.severity == "warn"]
+    assert len(warns) > 0
+    assert "Could not validate" in warns[0].message
+
+
+def test_param_ranges_no_gen_params():
+    alias = MagicMock()
+    alias.alias = "myalias"
+    alias.gen_params = None
+    ctx = _make_ctx(aliases=[alias])
+    issues = ConfigValidator()._check_param_ranges(ctx)
+    ok = [i for i in issues if i.severity == "ok"]
+    assert len(ok) > 0
+
+
+def test_param_ranges_bad_top_p():
+    alias = MagicMock()
+    alias.alias = "myalias"
+    alias.gen_params = MagicMock()
+    alias.gen_params.temperature = None
+    alias.gen_params.top_p = 1.5
+    ctx = _make_ctx(aliases=[alias])
+    issues = ConfigValidator()._check_param_ranges(ctx)
+    warns = [i for i in issues if i.severity == "warn"]
+    assert any("top_p" in i.field for i in warns)
+
+
+def test_param_ranges_exception_returns_warn():
+    ctx = _make_ctx()
+    ctx.model_registry.list_all.side_effect = RuntimeError("param check error")
+    issues = ConfigValidator()._check_param_ranges(ctx)
+    warns = [i for i in issues if i.severity == "warn"]
+    assert len(warns) > 0
+
+
+def test_deprecated_fields_config_exists() -> None:
+    import yaml
+
+    ctx = _make_ctx()
+    ctx.paths.config_file.exists.return_value = True
+    ctx.paths.config_file.read_text.return_value = yaml.dump({"active_theme": "midnight"})
+
+    issues = ConfigValidator()._check_deprecated_fields(ctx)
+    ok = [i for i in issues if i.severity == "ok"]
+    assert len(ok) > 0
+
+
+def test_deprecated_check_exception_returns_warn():
+    ctx = _make_ctx()
+    ctx.paths.config_file.exists.return_value = True
+    ctx.paths.config_file.read_text.side_effect = RuntimeError("file error")
+    issues = ConfigValidator()._check_deprecated_fields(ctx)
+    warns = [i for i in issues if i.severity == "warn"]
+    assert len(warns) > 0
+
+
+def test_scheduled_prompts_exception_returns_warn():
+    ctx = _make_ctx()
+    ctx.schedule_manager.list_all.side_effect = RuntimeError("schedule error")
+    issues = ConfigValidator()._check_scheduled_prompts(ctx)
+    warns = [i for i in issues if i.severity == "warn"]
+    assert len(warns) > 0
+
+
+def test_plugin_conflicts_exception_returns_warn():
+    ctx = _make_ctx()
+    ctx.plugin_manager.list_plugins.side_effect = RuntimeError("plugin error")
+    issues = ConfigValidator()._check_plugin_conflicts(ctx)
+    warns = [i for i in issues if i.severity == "warn"]
+    assert len(warns) > 0
+
+
 def test_format_validation_table_empty():
     out = format_validation_table([])
     assert "passed" in out.lower()

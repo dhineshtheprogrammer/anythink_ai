@@ -71,6 +71,21 @@ class TestHelpCommand:
         result = await registry.dispatch("/help", ctx, state)
         assert result.error is False
 
+    async def test_help_debug_arg_shows_debug_commands(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/help debug", ctx, state)
+        assert result.message is not None
+        assert "/debug" in result.message
+
+    async def test_help_when_debug_active_shows_hint(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        ctx.debug_manager._active = True  # activate debug mode directly
+        result = await registry.dispatch("/help", ctx, state)
+        assert "debug" in (result.message or "").lower()
+        ctx.debug_manager._active = False  # reset
+
 
 class TestClearCommand:
     async def test_clear_returns_confirm_action(
@@ -170,6 +185,99 @@ class TestModelCommand:
         result = await registry.dispatch("/model", ctx, state)
         assert "mock" in (result.message or "")
         assert "llama3" in (result.message or "")
+
+    async def test_model_lists_aliases_when_available(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.config.models import ModelAlias
+
+        alias = ModelAlias(alias="my-model", provider="mock", model_id="llama3", context_window=4096)
+        ctx.model_registry.add(alias)
+        result = await registry.dispatch("/model", ctx, state)
+        assert "my-model" in (result.message or "")
+
+    async def test_model_switch_unknown_alias_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/model nonexistent-alias", ctx, state)
+        assert result.error is True
+        assert "not found" in (result.message or "").lower()
+
+    async def test_model_switch_success(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from anythink.config.models import ModelAlias
+
+        alias = ModelAlias(
+            alias="new-model",
+            provider="mock",
+            model_id="claude-3",
+            context_window=8192,
+        )
+        ctx.model_registry.add(alias)
+        mock_provider = MagicMock()
+        mock_provider.requires_api_key = False
+        with (
+            patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
+            result = await registry.dispatch("/model new-model", ctx, state)
+        assert result.error is not True
+        assert "new-model" in (result.message or "")
+        assert state.model_id == "claude-3"
+
+    async def test_model_switch_provider_load_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from unittest.mock import patch
+
+        from anythink.config.models import ModelAlias
+        from anythink.exceptions import ProviderUnavailableError
+
+        alias = ModelAlias(
+            alias="bad-model",
+            provider="badprovider",
+            model_id="x",
+            context_window=4096,
+        )
+        ctx.model_registry.add(alias)
+        with (
+            patch.object(
+                ctx.provider_registry,
+                "instantiate",
+                side_effect=ProviderUnavailableError("SDK missing", provider="badprovider"),
+            ),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
+            result = await registry.dispatch("/model bad-model", ctx, state)
+        assert result.error is True
+        assert "Failed to load" in (result.message or "")
+
+    async def test_model_switch_requires_key_but_none(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from anythink.config.models import ModelAlias
+
+        alias = ModelAlias(
+            alias="key-model",
+            provider="groq",
+            model_id="llama3",
+            context_window=8192,
+        )
+        ctx.model_registry.add(alias)
+        mock_provider = MagicMock()
+        mock_provider.requires_api_key = True
+        with (
+            patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
+            result = await registry.dispatch("/model key-model", ctx, state)
+        assert result.error is True
+        assert "No API key" in (result.message or "")
 
 
 class TestPersonaCommand:

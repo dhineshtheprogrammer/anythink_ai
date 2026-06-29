@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Any
 
 from anythink.exceptions import MCPError
@@ -122,6 +123,7 @@ class MCPManager:
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> MCPCallResult:
         """Route *tool_name* to the right server and return its result."""
+        t0 = time.monotonic()
         server_name = self._tool_index.get(tool_name)
         if server_name is None:
             return MCPCallResult(
@@ -129,6 +131,7 @@ class MCPManager:
                 server_name="",
                 content=f"Unknown tool '{tool_name}'. Use /mcp tools to list available tools.",
                 is_error=True,
+                duration_s=round(time.monotonic() - t0, 3),
             )
 
         if server_name in self._builtins:
@@ -142,4 +145,5 @@ class MCPManager:
             server_name=server_name,
             content=f"Server '{server_name}' is no longer connected.",
             is_error=True,
+            duration_s=round(time.monotonic() - t0, 3),
         )

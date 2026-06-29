@@ -88,3 +88,49 @@ class TestScheduledPrompt:
         assert s.enabled is True
         assert s.last_run is None
         assert s.alias is None
+
+
+class TestScheduleManagerEdgeCases:
+    def test_save_when_not_dirty_is_noop(self, xdg_dirs) -> None:
+        mgr = ScheduleManager(xdg_dirs.schedules_file)
+        mgr.save()  # should not raise — early return when not dirty
+
+    def test_load_yaml_error_raises(self, xdg_dirs) -> None:
+        xdg_dirs.schedules_file.write_text(": invalid: yaml: {")
+        mgr = ScheduleManager(xdg_dirs.schedules_file)
+        with pytest.raises(Exception):
+            mgr.list_all()
+
+    def test_enable_missing_raises(self, xdg_dirs) -> None:
+        mgr = ScheduleManager(xdg_dirs.schedules_file)
+        with pytest.raises(ScheduleError):
+            mgr.enable("nonexistent")
+
+    def test_disable_missing_raises(self, xdg_dirs) -> None:
+        mgr = ScheduleManager(xdg_dirs.schedules_file)
+        with pytest.raises(ScheduleError):
+            mgr.disable("nonexistent")
+
+    def test_update_last_run_missing_raises(self, xdg_dirs) -> None:
+        from datetime import datetime
+
+        mgr = ScheduleManager(xdg_dirs.schedules_file)
+        with pytest.raises(ScheduleError):
+            mgr.update_last_run("nonexistent", datetime.utcnow())
+
+
+class TestScheduledPromptWithLastRun:
+    def test_roundtrip_with_last_run(self) -> None:
+        from datetime import datetime
+
+        now = datetime.utcnow()
+        s = ScheduledPrompt("s", "* * * * *", "p")
+        s = ScheduledPrompt(
+            name="s",
+            cron_expr="* * * * *",
+            prompt="p",
+            last_run=now,
+        )
+        d = s.to_dict()
+        restored = ScheduledPrompt.from_dict(d)
+        assert restored.last_run is not None

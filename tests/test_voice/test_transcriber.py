@@ -135,3 +135,13 @@ class TestVoiceTranscriberWithMockedWhisper:
 
         # load_model called only once (model is cached)
         assert mock_whisper.load_model.call_count == 1
+
+
+class TestTranscriberNumpyImportError:
+    def test_transcribe_raises_voice_error_without_numpy(self) -> None:
+        from anythink.exceptions import VoiceError
+
+        t = VoiceTranscriber()
+        with patch.dict(sys.modules, {"numpy": None}):
+            with pytest.raises(VoiceError, match="numpy"):
+                t.transcribe([0.0, 0.0])

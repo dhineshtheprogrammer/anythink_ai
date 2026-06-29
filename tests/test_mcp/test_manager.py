@@ -172,3 +172,58 @@ class TestMCPManagerExternal:
         ext = next(s for s in servers if s.name == "remote")
         assert ext.kind == "external"
         assert ext.transport == "sse"
+
+    def test_list_tools_includes_external_client_tools(self) -> None:
+        mgr = MCPManager()
+        mock_client = MagicMock()
+        mock_tool = MCPTool("ext_t", "desc", {}, "ext")
+        mock_client.cached_tools = [mock_tool]
+        mgr._externals["ext"] = mock_client
+        tools = mgr.list_tools()
+        assert any(t.name == "ext_t" for t in tools)
+
+    async def test_call_tool_dispatches_to_external(self) -> None:
+        mgr = MCPManager()
+        mock_client = MagicMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=MCPCallResult(tool_name="ext_t", server_name="ext", content="done")
+        )
+        mock_client.cached_tools = [MCPTool("ext_t", "desc", {}, "ext")]
+        mgr._externals["ext"] = mock_client
+        mgr._tool_index["ext_t"] = "ext"
+        result = await mgr.call_tool("ext_t", {})
+        assert not result.is_error
+        assert result.content == "done"
+
+    async def test_call_tool_stale_server_returns_error(self) -> None:
+        mgr = MCPManager()
+        mgr._tool_index["orphan_t"] = "ghost_server"
+        result = await mgr.call_tool("orphan_t", {})
+        assert result.is_error
+        assert "no longer connected" in result.content
+
+    async def test_reconnect_disconnects_existing_first(self) -> None:
+        mgr = MCPManager()
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+        mock_client.is_connected = True
+        mock_client.tool_count = 1
+        mock_client.transport = "stdio"
+        mock_client._command = "python s.py"
+        mock_client._url = ""
+        mock_client.cached_tools = []
+
+        import anythink.mcp.client as client_mod
+
+        orig_cls = client_mod.MCPClient
+        try:
+            client_mod.MCPClient = MagicMock(return_value=mock_client)  # type: ignore[attr-defined]
+            config = MCPConnectConfig(name="ext2", transport="stdio", command="python s.py")
+            await mgr.connect(config)
+            # Second connect with same name should disconnect first
+            await mgr.connect(config)
+        finally:
+            client_mod.MCPClient = orig_cls  # type: ignore[attr-defined]
+
+        assert mock_client.disconnect.call_count >= 1

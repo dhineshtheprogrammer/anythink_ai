@@ -45,6 +45,83 @@ from anythink.tools.runner import ToolRunner
 from anythink.ui.console import make_console
 from anythink.ui.theme import Theme, get_theme
 
+# Known vision-capable model ID fragments — used to decide whether to pass
+# vision_capable=True to WindowsScreenshotServer.
+_VISION_MODEL_HINTS = frozenset(
+    {"claude-3", "claude-4", "claude-sonnet", "claude-opus", "claude-haiku",
+     "gpt-4o", "gemini", "gpt-4-vision", "llava"}
+)
+
+
+def _check_vision_capable(config: AppConfig) -> bool:
+    alias = config.default_model_alias
+    if not alias:
+        return False
+    alias_lower = alias.lower()
+    return any(hint in alias_lower for hint in _VISION_MODEL_HINTS)
+
+
+def _build_windows_servers(config: AppConfig, paths: "Paths") -> list:  # type: ignore[type-arg]
+    """Return the 10 Windows MCP servers when running on Windows with windows_enabled=True.
+
+    All imports are deferred so non-Windows platforms never load Windows-only code.
+    Returns an empty list on non-Windows or when the feature is disabled.
+    """
+    import sys as _sys
+    if _sys.platform != "win32" or not config.windows_enabled:
+        return []
+
+    from anythink.mcp.builtin.windows_apps import WindowsAppsServer
+    from anythink.mcp.builtin.windows_clipboard import WindowsClipboardServer
+    from anythink.mcp.builtin.windows_explorer import WindowsExplorerServer
+    from anythink.mcp.builtin.windows_filesystem import WindowsFilesystemServer
+    from anythink.mcp.builtin.windows_notification import WindowsNotificationServer
+    from anythink.mcp.builtin.windows_process import WindowsProcessServer
+    from anythink.mcp.builtin.windows_screenshot import WindowsScreenshotServer
+    from anythink.mcp.builtin.windows_settings import WindowsSettingsServer
+    from anythink.mcp.builtin.windows_system import WindowsSystemServer
+    from anythink.mcp.builtin.windows_window import WindowsWindowServer
+    from anythink.mcp.windows.audit import WindowsAuditLog
+    from anythink.mcp.windows.paths import WindowsPathGuard
+    from anythink.mcp.windows.safety import WindowsSafetyChecker
+
+    audit_path = config.windows_audit_log_path or str(
+        paths.state_dir / "logs" / "windows_audit.log"
+    )
+    path_guard = WindowsPathGuard(config)
+    safety = WindowsSafetyChecker()
+    audit = WindowsAuditLog(audit_path)
+    vision_capable = _check_vision_capable(config)
+
+    return [
+        WindowsFilesystemServer(path_guard, safety, audit),
+        WindowsExplorerServer(path_guard, safety, audit),
+        WindowsAppsServer(
+            safety,
+            audit,
+            blocked_apps=config.windows_blocked_apps,
+            cache_ttl_minutes=config.windows_apps_cache_ttl_minutes,
+        ),
+        WindowsWindowServer(safety, audit, gui_mode=config.windows_gui_mode),
+        WindowsProcessServer(safety, audit, blocked_apps=config.windows_blocked_apps),
+        WindowsSystemServer(audit),
+        WindowsSettingsServer(safety, audit),
+        WindowsClipboardServer(safety, audit),
+        WindowsScreenshotServer(
+            safety,
+            audit,
+            vision_capable=vision_capable,
+            gui_mode=config.windows_gui_mode,
+            max_px=config.windows_screenshot_max_px,
+            path_guard=path_guard,
+        ),
+        WindowsNotificationServer(
+            safety,
+            audit,
+            app_name=config.windows_notification_app_name,
+        ),
+    ]
+
 
 @dataclass
 class AppContext:
@@ -137,6 +214,7 @@ class AppContext:
                 SessionsServer(session_manager),
                 RAGServer(rag_manager, emb),
                 SearchServer(search_reg, preferred=config.search_provider),
+                *_build_windows_servers(config, resolved),
             ]
         )
 

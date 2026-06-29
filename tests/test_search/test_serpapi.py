@@ -161,3 +161,13 @@ class TestSerpAPIHelpers:
             await SerpAPISearch(api_key="k").search("python", safe_search="strict")
         call_str = str(client.get.call_args)
         assert "active" in call_str
+
+    def test_domain_from_url_empty_host(self) -> None:
+        # URL with empty host after scheme
+        result = _domain_from_url("https:///path/to/resource")
+        assert result is None
+
+    def test_domain_from_url_exception_returns_none(self) -> None:
+        # Passing a non-str triggers exception → None
+        result = _domain_from_url(None)  # type: ignore[arg-type]
+        assert result is None

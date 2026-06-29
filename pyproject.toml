@@ -70,6 +70,16 @@ mcp = ["mcp>=1.0"]
 # --- V3 extras ---
 pdf = ["fpdf2>=2.7"]
 scheduler = ["croniter>=2.0"]
+# --- Windows OS MCP integration ---
+windows = [
+    "pywin32>=306",
+    "psutil>=5.9",
+    "pygetwindow>=0.0.9",
+    "pyautogui>=0.9.54",
+    "Pillow>=10.0",
+    "winotify>=1.1.0",
+    "win10toast>=0.9",
+]
 all = [
     "groq>=0.9",
     "google-generativeai>=0.7",
@@ -87,6 +97,13 @@ all = [
     "mcp>=1.0",
     "fpdf2>=2.7",
     "croniter>=2.0",
+    "pywin32>=306",
+    "psutil>=5.9",
+    "pygetwindow>=0.0.9",
+    "pyautogui>=0.9.54",
+    "Pillow>=10.0",
+    "winotify>=1.1.0",
+    "win10toast>=0.9",
 ]
 dev = [
     "pytest>=8.0",
@@ -153,6 +170,17 @@ filesystem = "anythink.mcp.builtin.filesystem:FilesystemServer"
 sessions = "anythink.mcp.builtin.sessions:SessionsServer"
 rag = "anythink.mcp.builtin.rag:RAGServer"
 search = "anythink.mcp.builtin.search:SearchServer"
+# Windows OS MCP servers (registered always; gated by sys.platform + windows_enabled at runtime)
+windows_filesystem = "anythink.mcp.builtin.windows_filesystem:WindowsFilesystemServer"
+windows_explorer = "anythink.mcp.builtin.windows_explorer:WindowsExplorerServer"
+windows_apps = "anythink.mcp.builtin.windows_apps:WindowsAppsServer"
+windows_window = "anythink.mcp.builtin.windows_window:WindowsWindowServer"
+windows_process = "anythink.mcp.builtin.windows_process:WindowsProcessServer"
+windows_system = "anythink.mcp.builtin.windows_system:WindowsSystemServer"
+windows_settings = "anythink.mcp.builtin.windows_settings:WindowsSettingsServer"
+windows_clipboard = "anythink.mcp.builtin.windows_clipboard:WindowsClipboardServer"
+windows_screenshot = "anythink.mcp.builtin.windows_screenshot:WindowsScreenshotServer"
+windows_notification = "anythink.mcp.builtin.windows_notification:WindowsNotificationServer"
 
 # --- V4 MMOS plugin hook groups (empty — third parties register here) ---
 [project.entry-points."anythink.pre_routing_hooks"]

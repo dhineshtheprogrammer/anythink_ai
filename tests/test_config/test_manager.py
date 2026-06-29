@@ -28,6 +28,15 @@ class TestPaths:
     def test_keyring_index_file_path(self, xdg_dirs: Paths) -> None:
         assert xdg_dirs.keyring_index_file == xdg_dirs.config_dir / "keyring_index.yaml"
 
+    def test_api_debug_log_file(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.api_debug_log_file == xdg_dirs.state_dir / "logs" / "api_debug.log"
+
+    def test_debug_exports_dir(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.debug_exports_dir == xdg_dirs.data_dir / "debug_exports"
+
+    def test_model_capability_registry_file(self, xdg_dirs: Paths) -> None:
+        assert xdg_dirs.model_capability_registry_file == xdg_dirs.data_dir / "model_registry.json"
+
 
 class TestValidateConfig:
     def test_valid_config_returns_no_errors(self) -> None:
@@ -78,6 +87,42 @@ class TestValidateConfig:
         for name in ("charcoal", "linen", "rose", "dracula"):
             errors = validate_config({"active_theme": name})
             assert errors == [], f"Theme '{name}' should be valid but got: {errors}"
+
+    def test_search_max_per_response_out_of_range(self) -> None:
+        errors = validate_config({"search_max_per_response": 0})
+        assert any("search_max_per_response" in str(e) for e in errors)
+
+    def test_search_max_per_response_too_high(self) -> None:
+        errors = validate_config({"search_max_per_response": 25})
+        assert any("search_max_per_response" in str(e) for e in errors)
+
+    def test_search_max_per_response_non_integer(self) -> None:
+        errors = validate_config({"search_max_per_response": "not-a-number"})
+        assert any("search_max_per_response" in str(e) for e in errors)
+
+    def test_search_cache_ttl_minutes_out_of_range(self) -> None:
+        errors = validate_config({"search_cache_ttl_minutes": 0})
+        assert any("search_cache_ttl_minutes" in str(e) for e in errors)
+
+    def test_search_cache_ttl_minutes_non_integer(self) -> None:
+        errors = validate_config({"search_cache_ttl_minutes": "bad"})
+        assert any("search_cache_ttl_minutes" in str(e) for e in errors)
+
+    def test_search_preview_delay_out_of_range(self) -> None:
+        errors = validate_config({"search_preview_delay_s": 31.0})
+        assert any("search_preview_delay_s" in str(e) for e in errors)
+
+    def test_search_preview_delay_non_numeric(self) -> None:
+        errors = validate_config({"search_preview_delay_s": "fast"})
+        assert any("search_preview_delay_s" in str(e) for e in errors)
+
+    def test_windows_screenshot_max_px_invalid(self) -> None:
+        errors = validate_config({"windows_screenshot_max_px": "big"})
+        assert any("windows_screenshot_max_px" in str(e) for e in errors)
+
+    def test_windows_screenshot_max_px_negative(self) -> None:
+        errors = validate_config({"windows_screenshot_max_px": -1})
+        assert any("windows_screenshot_max_px" in str(e) for e in errors)
 
 
 class TestConfigManager:
@@ -209,6 +254,47 @@ class TestConfigManager:
         config_manager.paths.config_file.write_text(yaml.dump({"notifications": "not-a-dict"}))
         loaded = config_manager.load()
         assert loaded.notifications == {}
+
+
+class TestConfigManagerSaveOptionalFields:
+    def test_save_with_spend_budget_soft_limit(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(spend_budget_soft_limit=10.0, spend_budget_period="monthly")
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert loaded.spend_budget_soft_limit == pytest.approx(10.0)
+
+    def test_save_with_mmos_fallback_order(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(mmos_fallback_order=("openai", "anthropic"))
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert list(loaded.mmos_fallback_order) == ["openai", "anthropic"]
+
+    def test_save_with_windows_allowed_paths(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(windows_allowed_paths=("C:\\Users",))
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert list(loaded.windows_allowed_paths) == ["C:\\Users"]
+
+    def test_save_with_windows_blocked_paths(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(windows_blocked_paths=("C:\\Windows\\System32",))
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert list(loaded.windows_blocked_paths) == ["C:\\Windows\\System32"]
+
+    def test_save_with_windows_audit_log_path(self, config_manager: ConfigManager) -> None:
+        config = AppConfig(windows_audit_log_path="C:\\logs\\audit.log")
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert loaded.windows_audit_log_path == "C:\\logs\\audit.log"
+
+    def test_save_with_windows_blocked_apps_non_default(
+        self, config_manager: ConfigManager
+    ) -> None:
+        custom_apps = ("custom.exe", "other.exe")
+        config = AppConfig(windows_blocked_apps=custom_apps)
+        config_manager.save(config)
+        loaded = config_manager.load()
+        assert list(loaded.windows_blocked_apps) == list(custom_apps)
 
 
 class TestResolvePathsWithoutXdg:

@@ -78,3 +78,12 @@ class TestLocalEmbeddingBackendDimensions:
             backend = LocalEmbeddingBackend()
             with pytest.raises(ImportError, match="anythink\\[rag\\]"):
                 await backend.embed(["hello"])
+
+
+class TestMockEmbeddingBackend:
+    def test_dimensions_property(self) -> None:
+        from anythink.embeddings.mock import MockEmbeddingBackend
+
+        backend = MockEmbeddingBackend()
+        assert isinstance(backend.dimensions, int)
+        assert backend.dimensions > 0

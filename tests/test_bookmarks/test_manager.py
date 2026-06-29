@@ -167,3 +167,16 @@ class TestBookmarkModel:
         bm = Bookmark.from_dict({"turn_index": 5})
         assert bm.label == ""
         assert bm.turn_index == 5
+
+
+class TestGetByTurn:
+    def test_get_by_turn_found(self) -> None:
+        mgr = _make_mgr()
+        mgr.add(3)
+        bm = mgr.get_by_turn(3)
+        assert bm is not None
+        assert bm.turn_index == 3
+
+    def test_get_by_turn_not_found_returns_none(self) -> None:
+        mgr = _make_mgr()
+        assert mgr.get_by_turn(9999) is None

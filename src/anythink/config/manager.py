@@ -173,7 +173,9 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "spend_budget_period": frozenset({"daily", "monthly"}),
     # RAG V2
     "rag_retrieval_strategy": frozenset({"vector", "bm25", "hybrid", "mmr"}),
-    "rag_chunk_strategy": frozenset({"fixed", "sentence", "paragraph", "semantic", "code", "heading"}),
+    "rag_chunk_strategy": frozenset(
+        {"fixed", "sentence", "paragraph", "semantic", "code", "heading"}
+    ),
     "rag_no_match_behavior": frozenset({"graceful", "passthrough"}),
     # V4 MMOS
     "mmos_mode": frozenset({"online", "offline", "auto"}),
@@ -236,6 +238,14 @@ def validate_config(raw: dict[str, Any]) -> list[ConfigError]:
         except (TypeError, ValueError):
             errors.append(ConfigError("'search_preview_delay_s' must be a number"))
 
+    for int_field, min_val in (
+        ("windows_screenshot_max_px", 1),
+        ("windows_apps_cache_ttl_minutes", 1),
+    ):
+        val = raw.get(int_field)
+        if val is not None and (not isinstance(val, int) or val < min_val):
+            errors.append(ConfigError(f"'{int_field}' must be a positive integer, got {val!r}"))
+
     return errors
 
 
@@ -276,6 +286,26 @@ class ConfigManager:
         mmos_fallback_raw = raw.get("mmos_fallback_order", [])
         mmos_fallback: tuple[str, ...] = (
             tuple(str(x) for x in mmos_fallback_raw) if isinstance(mmos_fallback_raw, list) else ()
+        )
+        windows_allowed_raw = raw.get("windows_allowed_paths", [])
+        windows_blocked_raw = raw.get("windows_blocked_paths", [])
+        windows_blocked_apps_raw = raw.get(
+            "windows_blocked_apps", ["regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe"]
+        )
+        windows_allowed: tuple[str, ...] = (
+            tuple(str(p) for p in windows_allowed_raw)
+            if isinstance(windows_allowed_raw, list)
+            else ()
+        )
+        windows_blocked: tuple[str, ...] = (
+            tuple(str(p) for p in windows_blocked_raw)
+            if isinstance(windows_blocked_raw, list)
+            else ()
+        )
+        windows_blocked_apps: tuple[str, ...] = (
+            tuple(str(a) for a in windows_blocked_apps_raw)
+            if isinstance(windows_blocked_apps_raw, list)
+            else ("regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe")
         )
         return AppConfig(
             default_model_alias=raw.get("default_model_alias"),
@@ -341,6 +371,17 @@ class ConfigManager:
             search_include_domains=tuple(raw.get("search_include_domains", [])),
             search_exclude_domains=tuple(raw.get("search_exclude_domains", [])),
             search_max_page_chars=int(raw.get("search_max_page_chars", 15_000)),
+            # Windows MCP fields
+            windows_enabled=bool(raw.get("windows_enabled", False)),
+            windows_gui_mode=bool(raw.get("windows_gui_mode", False)),
+            windows_allowed_paths=windows_allowed,
+            windows_blocked_paths=windows_blocked,
+            windows_blocked_apps=windows_blocked_apps,
+            windows_audit_log_enabled=bool(raw.get("windows_audit_log_enabled", True)),
+            windows_audit_log_path=str(raw.get("windows_audit_log_path", "")),
+            windows_screenshot_max_px=int(raw.get("windows_screenshot_max_px", 1920)),
+            windows_notification_app_name=str(raw.get("windows_notification_app_name", "Anythink")),
+            windows_apps_cache_ttl_minutes=int(raw.get("windows_apps_cache_ttl_minutes", 60)),
         )
 
     def save(self, config: AppConfig) -> None:
@@ -422,5 +463,21 @@ class ConfigManager:
         if config.search_exclude_domains:
             data["search_exclude_domains"] = list(config.search_exclude_domains)
         data["search_max_page_chars"] = config.search_max_page_chars
+
+        # Windows MCP fields
+        data["windows_enabled"] = config.windows_enabled
+        data["windows_gui_mode"] = config.windows_gui_mode
+        data["windows_audit_log_enabled"] = config.windows_audit_log_enabled
+        data["windows_screenshot_max_px"] = config.windows_screenshot_max_px
+        data["windows_notification_app_name"] = config.windows_notification_app_name
+        data["windows_apps_cache_ttl_minutes"] = config.windows_apps_cache_ttl_minutes
+        if config.windows_allowed_paths:
+            data["windows_allowed_paths"] = list(config.windows_allowed_paths)
+        if config.windows_blocked_paths:
+            data["windows_blocked_paths"] = list(config.windows_blocked_paths)
+        if config.windows_blocked_apps != ("regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe"):
+            data["windows_blocked_apps"] = list(config.windows_blocked_apps)
+        if config.windows_audit_log_path:
+            data["windows_audit_log_path"] = config.windows_audit_log_path
 
         self.paths.config_file.write_text(yaml.dump(data, default_flow_style=False, sort_keys=True))

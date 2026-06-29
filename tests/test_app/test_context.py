@@ -81,3 +81,50 @@ class TestAppContextCreate:
         # xdg_dirs fixture already set XDG env vars — create() without paths should use them
         ctx = AppContext.create(console_file=StringIO())
         assert ctx.paths.config_dir == xdg_dirs.config_dir
+
+
+class TestAppContextCreateWithConfig:
+    def test_debug_mode_enabled_on_startup(self, xdg_dirs: Paths) -> None:
+        from unittest.mock import patch
+
+        from anythink.config.schema import AppConfig as AC
+
+        with patch(
+            "anythink.config.manager.ConfigManager.load",
+            return_value=AC(debug_mode=True, debug_level=1),
+        ):
+            ctx = AppContext.create(paths=xdg_dirs, console_file=StringIO())
+        assert ctx.debug_manager.is_active() is True
+
+    def test_debug_api_logging_enabled_on_startup(self, xdg_dirs: Paths) -> None:
+        from unittest.mock import patch
+
+        from anythink.config.schema import AppConfig as AC
+
+        with patch(
+            "anythink.config.manager.ConfigManager.load",
+            return_value=AC(debug_api_logging=True),
+        ):
+            ctx = AppContext.create(paths=xdg_dirs, console_file=StringIO())
+        assert ctx.debug_manager.api_logging_active() is True
+
+    def test_active_rag_index_loaded_on_startup(self, xdg_dirs: Paths) -> None:
+        import yaml
+
+        xdg_dirs.config_file.write_text(
+            yaml.dump({"active_rag_index": "my-index"})
+        )
+        ctx = AppContext.create(paths=xdg_dirs, console_file=StringIO())
+        assert ctx.rag_manager is not None
+
+    def test_vision_capable_with_vision_alias(self, xdg_dirs: Paths) -> None:
+        from anythink.app.context import _check_vision_capable
+
+        config = AppConfig(default_model_alias="gpt-4-vision")
+        assert _check_vision_capable(config) is True
+
+    def test_vision_not_capable_with_text_alias(self, xdg_dirs: Paths) -> None:
+        from anythink.app.context import _check_vision_capable
+
+        config = AppConfig(default_model_alias="llama3-8b")
+        assert _check_vision_capable(config) is False
