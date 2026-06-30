@@ -124,6 +124,15 @@ class TestValidateConfig:
         errors = validate_config({"windows_screenshot_max_px": -1})
         assert any("windows_screenshot_max_px" in str(e) for e in errors)
 
+    def test_valid_workflow_autonomy_modes(self) -> None:
+        assert validate_config({"workflow_autonomy_mode": "confirm"}) == []
+        assert validate_config({"workflow_autonomy_mode": "auto"}) == []
+
+    def test_invalid_workflow_autonomy_mode(self) -> None:
+        errors = validate_config({"workflow_autonomy_mode": "bogus"})
+        assert len(errors) == 1
+        assert "workflow_autonomy_mode" in str(errors[0])
+
 
 class TestConfigManager:
     def test_is_configured_false_when_no_file(self, config_manager: ConfigManager) -> None:

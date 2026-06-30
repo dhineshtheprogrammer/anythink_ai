@@ -189,6 +189,39 @@ class TestHUDLine2RagEmbedding:
         assert "openai-emb/text-embedding-3-large" in line.plain
 
 
+class TestHUDWorkflowActive:
+    """Unit tests for the MMWE workflow_active reactive field (Phase 11)."""
+
+    def test_workflow_active_default_false(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        assert hud.workflow_active is False
+
+    def test_workflow_indicator_absent_when_inactive(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.workflow_active = False
+        line = hud._line2(100)
+        assert "WORKFLOW" not in line.plain
+
+    def test_workflow_indicator_present_when_active(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.workflow_active = True
+        line = hud._line2(100)
+        assert "WORKFLOW" in line.plain
+
+    def test_workflow_indicator_contains_icon(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.workflow_active = True
+        line = hud._line2(100)
+        assert "⚙" in line.plain
+
+    def test_setting_active_then_inactive_removes_indicator(self) -> None:
+        hud = HUDWidget(MIDNIGHT, "1.0.0")
+        hud.workflow_active = True
+        assert "WORKFLOW" in hud._line2(100).plain
+        hud.workflow_active = False
+        assert "WORKFLOW" not in hud._line2(100).plain
+
+
 @pytest.mark.asyncio
 async def test_hud_present_in_dom() -> None:
     from unittest.mock import patch

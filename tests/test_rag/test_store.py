@@ -97,6 +97,13 @@ class TestVectorStore:
         results = loaded.query([1.0, 0.0, 0.0], top_k=1)
         assert results[0].source_path == "a.txt"
 
+    def test_all_texts_returns_all_chunk_texts(self) -> None:
+        store = self._make_store()
+        texts = store.all_texts()
+        assert len(texts) == 3
+        assert "apple fruit" in texts
+        assert "car vehicle" in texts
+
     def test_result_has_source_path(self) -> None:
         store = self._make_store()
         results = store.query([1.0, 0.0, 0.0], top_k=1)

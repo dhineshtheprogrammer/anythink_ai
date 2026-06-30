@@ -17,6 +17,10 @@ from anythink.plugins.manager import PluginManager
 from anythink.providers.registry import ProviderRegistry
 from anythink.search.registry import SearchRegistry
 from anythink.session.manager import SessionManager
+from anythink.workflow.engine import WorkflowEngine
+from anythink.workflow.manifest import CapabilityManifest
+from anythink.workflow.registry import WorkflowCapabilityRegistry
+from anythink.workflow.storage import WorkflowStorage
 
 
 @pytest.fixture()
@@ -111,9 +115,7 @@ class TestAppContextCreateWithConfig:
     def test_active_rag_index_loaded_on_startup(self, xdg_dirs: Paths) -> None:
         import yaml
 
-        xdg_dirs.config_file.write_text(
-            yaml.dump({"active_rag_index": "my-index"})
-        )
+        xdg_dirs.config_file.write_text(yaml.dump({"active_rag_index": "my-index"}))
         ctx = AppContext.create(paths=xdg_dirs, console_file=StringIO())
         assert ctx.rag_manager is not None
 
@@ -128,3 +130,67 @@ class TestAppContextCreateWithConfig:
 
         config = AppConfig(default_model_alias="llama3-8b")
         assert _check_vision_capable(config) is False
+
+
+class TestAppContextMMWEIntegration:
+    """Phase 9 — verify MMWE subsystems are wired into AppContext."""
+
+    def test_workflow_registry_wired(self, ctx: AppContext) -> None:
+        assert isinstance(ctx.workflow_registry, WorkflowCapabilityRegistry)
+
+    def test_workflow_storage_wired(self, ctx: AppContext) -> None:
+        assert isinstance(ctx.workflow_storage, WorkflowStorage)
+
+    def test_workflow_manifest_wired(self, ctx: AppContext) -> None:
+        assert isinstance(ctx.workflow_manifest, CapabilityManifest)
+
+    def test_workflow_engine_wired(self, ctx: AppContext) -> None:
+        assert isinstance(ctx.workflow_engine, WorkflowEngine)
+
+    def test_workflow_manifest_written_to_config_dir(
+        self, ctx: AppContext, xdg_dirs: Paths
+    ) -> None:
+        expected = xdg_dirs.config_dir / "workflow_manifest.txt"
+        assert ctx.workflow_manifest.path == expected
+
+    def test_workflow_manifest_file_exists_after_create(
+        self, ctx: AppContext, xdg_dirs: Paths
+    ) -> None:
+        assert (xdg_dirs.config_dir / "workflow_manifest.txt").exists()
+
+    def test_workflow_storage_dir_under_config(self, ctx: AppContext, xdg_dirs: Paths) -> None:
+        assert ctx.workflow_storage._dir == xdg_dirs.config_dir / "workflows"
+
+    def test_workflow_log_dir_defaults_to_xdg_data(self, ctx: AppContext, xdg_dirs: Paths) -> None:
+        assert ctx.workflow_engine._logger._dir == xdg_dirs.data_dir / "workflow_logs"
+
+    def test_workflow_log_dir_override_via_config(self, xdg_dirs: Paths) -> None:
+        from unittest.mock import patch
+
+        with patch(
+            "anythink.config.manager.ConfigManager.load",
+            return_value=AppConfig(workflow_log_dir="custom_logs"),
+        ):
+            ctx = AppContext.create(paths=xdg_dirs, console_file=StringIO())
+        assert ctx.workflow_engine._logger._dir == xdg_dirs.data_dir / "custom_logs"
+
+
+class TestAppConfigMMWEFields:
+    """Phase 9 — verify the three new AppConfig MMWE fields and their defaults."""
+
+    def test_workflow_planner_model_default(self) -> None:
+        assert AppConfig().workflow_planner_model == ""
+
+    def test_workflow_log_dir_default(self) -> None:
+        assert AppConfig().workflow_log_dir == ""
+
+    def test_workflow_autonomy_mode_default(self) -> None:
+        assert AppConfig().workflow_autonomy_mode == "confirm"
+
+    def test_workflow_planner_model_is_frozen(self) -> None:
+        config = AppConfig(workflow_planner_model="gpt-4o")
+        assert config.workflow_planner_model == "gpt-4o"
+
+    def test_workflow_autonomy_mode_auto(self) -> None:
+        config = AppConfig(workflow_autonomy_mode="auto")
+        assert config.workflow_autonomy_mode == "auto"

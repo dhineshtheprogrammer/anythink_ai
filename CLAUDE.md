@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Anythink is a universal AI terminal workstation (`pip install anythink`) built in Python 3.11+. It provides a full-featured TUI powered by **Textual**, with LLM providers, session management, slash commands, RAG, agentic tools (exec, browse, MCP), voice input, desktop notifications, a 4-panel dashboard, a plugin system, a full V3 automation layer (spend tracking, templates, comparison, export, scheduling, batch processing, diagnostics, self-update, config backup), and a V3.2 debug mode system for deep request inspection.
+Anythink is a universal AI terminal workstation (`pip install anythink`) built in Python 3.11+. It provides a full-featured TUI powered by **Textual**, with LLM providers, session management, slash commands, RAG, agentic tools (exec, browse, MCP), voice input, desktop notifications, a 4-panel dashboard, a plugin system, a full V3 automation layer (spend tracking, templates, comparison, export, scheduling, batch processing, diagnostics, self-update, config backup), a V3.2 debug mode system for deep request inspection, an enhanced multi-backend web search system, and an MMWE (Multi-Model Workflow Engine) for multi-stage AI pipelines.
 
 ## Commands
 
@@ -57,7 +57,7 @@ Coverage minimum is 80% (`--cov-fail-under=80`). `ui/input.py`, `ui/textual/app.
 
 `app/context.py:AppContext` is the single DI container constructed once at startup and threaded through the entire call stack. Every subsystem lives here — no module-level globals exist. Tests inject `Console(file=StringIO())` through this container.
 
-Key fields: `config`, `paths`, `theme`, `key_manager`, `provider_registry`, `model_registry`, `persona_manager`, `session_manager`, `search_registry`, `plugin_manager`, `rag_manager`, `embedding_registry`, `tool_runner`, `mcp_manager`, `notifier`, `spend_tracker`, `template_manager`, `schedule_manager`, `debug_manager`.
+Key fields: `config`, `paths`, `theme`, `key_manager`, `provider_registry`, `model_registry`, `persona_manager`, `session_manager`, `search_registry`, `search_cache`, `search_orchestrator`, `plugin_manager`, `rag_manager`, `embedding_registry`, `tool_runner`, `mcp_manager`, `notifier`, `spend_tracker`, `template_manager`, `schedule_manager`, `debug_manager`.
 
 **Mutating frozen config at runtime** — `AppConfig` is frozen; use `dataclasses.replace` and reassign `ctx.config`:
 ```python
@@ -72,6 +72,8 @@ ctx.config = new_config
 `app/chat.py:ChatState` is the mutable per-session state. Critical invariant: `history` and `bookmarks` always point to the **active branch's** lists (shared reference set up in `__post_init__`). Switching branches calls `BranchManager.switch_to()`, which swaps these references — code that reads `state.history` therefore always sees the active branch without knowing about branches.
 
 `state.gen_params` (V3) carries the active alias's `GenerationParams`; passed directly to `stream_chat()` in both the simple chat loop and the TUI `_stream_response()` worker.
+
+`state.search_enabled` (bool, default `False`) and `state.search_mode` (`"general"` | `"news"`) are **session-only** — they are NOT persisted to config and NOT read back from YAML. They initialise from `config.search_default_enabled` in `_resolve_state()`.
 
 `_build_session(state)` in `app/chat.py` is the branch-aware serialisation helper. TUI workers that autosave call `ctx.session_manager.save(_build_session(state))`.
 
@@ -122,6 +124,7 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 | `"debug_panel_toggle"` | Shows/hides the `DebugPanel` right-side widget |
 | `"debug_hud_update"` | Refreshes the HUD debug indicator (`[DEBUG L2]`) |
 | `"replay_stream"` | Replays a stored `RequestDebugRecord` through a provider; params in `extra` |
+| `"search_hud_update"` | Refreshes HUD search mode field after `/search on\|off\|news\|toggle` |
 
 ### Textual TUI shell
 
@@ -167,6 +170,33 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 ### MCP
 
 `mcp/manager.py:MCPManager` holds a `_tool_index: dict[str, str]` (tool_name → server_name) for O(1) dispatch. Built-in servers need no SDK. External servers use `MCPClient` with `contextlib.AsyncExitStack` to manage stdio/SSE transport lifetimes.
+
+### Enhanced web search system
+
+Six backends registered under `anythink.search_backends`: `duckduckgo`, `serpapi`, `newsapi`, `bing`, `exa`, `google_cse`. Each subclasses `BaseSearchBackend` and declares capability flags `supports_freshness`, `supports_safe_search`, `supports_news`. `SearchResult` carries `published_date` and `source_domain` in addition to `title`, `url`, `snippet`.
+
+**`SearchCache`** (`search/cache.py`) — TTL-based in-memory cache with TF-IDF cosine semantic matching (threshold 0.85, no ML deps). Keyed by `(query, backend_name)`. `evict_expired()` is called at the start of each search-enabled response.
+
+**`QueryRewriter`** (`search/rewriter.py`) — sends a 1-shot LLM prompt to produce 1–3 concise search queries. Wrapped in `asyncio.wait_for(timeout=5.0)`; falls back to the original string on any failure.
+
+**`SearchOrchestrator`** (`search/orchestrator.py`) — single entry-point for all search logic: checks cache, calls `QueryRewriter`, runs up to `max_searches` queries against the selected backend, deduplicates by URL, applies domain include/exclude post-filters. News mode tries `("newsapi", "bing")` first, then falls back to any backend with `supports_news=True`.
+
+The `/search` command namespace (`commands/handlers.py`) handles: `on|off|news|toggle|status`, one-off queries, `fresh`, `include`/`exclude` domain lists, `cache`, `backends`, and `settings`.
+
+### MMWE — Multi-Model Workflow Engine
+
+`workflow/models.py` defines the full data model for multi-stage AI pipelines (executor not yet implemented — schema layer only).
+
+**Stage types** (`StageType` enum): `PLANNER`, `MCP_CALL`, `LLM_SPECIALIST`, `USER_APPROVAL`, `CONDITION`, `FORMATTER`, `LOOP`.
+
+**Key dataclasses**:
+- `WorkflowPlan` — parsed plan: `name`, `trigger`, `stages: list[Stage]`, `models_used`, `mcp_servers_used`.
+- `Stage` — a single pipeline step with type-specific fields: `model_alias`/`task_instruction` for `LLM_SPECIALIST`; `tool_name`/`tool_params` for `MCP_CALL`; `condition_expr`/`branch_a`/`branch_b` for `CONDITION`; `loop_def: LoopDefinition` for `LOOP`; `approval_message` for `USER_APPROVAL`.
+- `WorkflowState` — mutable runtime state with `accumulated_results: dict[str, Any]` keyed as `"stage_id.field_name"`. `resolve_ref(ref)` resolves dot-path references between stages; `store_result()` indexes output fields.
+- `WorkflowCallbacks` — async hooks for engine ↔ TUI/CLI: `on_stage_start`, `on_stage_complete`, `on_approval_needed`, `on_loop_progress`, `on_model_unavailable`.
+- `WorkflowLog` — full execution record for disk persistence.
+
+All dataclasses implement `to_dict()` / `from_dict()` for JSON round-trips. `Stage.from_dict()` is recursive (handles `branch_a`, `branch_b`, nested `LoopDefinition.sub_stages`).
 
 ### V3 systems
 
@@ -224,6 +254,10 @@ Entry-point groups: `anythink.providers`, `anythink.search_backends`, `anythink.
 
 **V3.2 AppConfig fields**: `debug_mode` (bool, default `False`), `debug_level` (int, default `2`, clamped 1–3), `debug_api_logging` (bool, default `False`).
 
+**Important**: `debug_mode`, `debug_level`, and `debug_api_logging` are **not parsed by `ConfigManager.load()` from YAML** — they always use their dataclass defaults regardless of what's in `config.yaml`. To test startup with debug pre-enabled, patch `ConfigManager.load` to return `AppConfig(debug_mode=True, ...)` directly.
+
+**Search AppConfig fields** (persisted to config.yaml): `search_default_enabled`, `search_mode`, `search_max_per_response`, `search_query_rewrite`, `search_preview`, `search_preview_delay_s`, `search_cache_enabled`, `search_cache_ttl_minutes`, `search_safe_search`, `search_freshness`, `search_include_domains`, `search_exclude_domains`, `search_max_page_chars`.
+
 ### Exception hierarchy
 
 ```
@@ -236,6 +270,8 @@ AnythinkError (message + user_message)
   BranchError / NotificationError
   SpendError / ExportError / ScheduleError / BatchError / UpdateError  ← V3
   DebugError  ← V3.2
+  WorkflowError  ← MMWE
+    WorkflowPlanError / WorkflowStageError
 ```
 
 Always raise the most specific subclass. `user_message` is what the terminal shows.
@@ -259,3 +295,4 @@ Supporting widgets in `ui/textual/` beyond the main app shell:
 - **Optional-dep tests** — use `patch.dict(sys.modules, {"sounddevice": None})` to simulate missing packages.
 - **`asyncio_mode = "auto"`** — all `async def` test functions run automatically; no `@pytest.mark.asyncio` needed.
 - **Debug tests** — `tests/test_debug_manager.py`, `test_debug_models.py`, `test_debug_formatters.py`, `test_debug_commands.py` cover the V3.2 debug layer. Formatters are pure functions and tested without TUI. Use a factory to build mock `RequestDebugRecord` objects rather than constructing them inline.
+- **Workflow tests** — `tests/test_workflow_models.py` covers `workflow/models.py`. All dataclasses have `to_dict()` / `from_dict()` round-trips; test recursive structures (nested stages in `branch_a`/`branch_b`, `LoopDefinition.sub_stages`) explicitly.

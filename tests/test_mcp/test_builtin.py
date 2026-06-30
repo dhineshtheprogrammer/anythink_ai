@@ -126,6 +126,11 @@ class TestSessionsServer:
         result = await srv.call_tool("get_session", {})
         assert result.is_error
 
+    async def test_unknown_tool_returns_error(self) -> None:
+        srv = self._make_server()
+        result = await srv.call_tool("nonexistent_tool", {})
+        assert result.is_error
+
 
 # ── RAG ───────────────────────────────────────────────────────────────────────
 

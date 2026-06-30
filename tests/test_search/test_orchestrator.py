@@ -142,6 +142,7 @@ class TestSearchOrchestrator:
         # Override registry.get to return None for news backends
         def _get(name: str) -> MagicMock | None:
             return None if name in ("newsapi", "bing") else (ddg if name == "duckduckgo" else None)
+
         registry.get = MagicMock(side_effect=_get)
         registry.names = MagicMock(return_value=["duckduckgo"])
 
@@ -242,6 +243,25 @@ class TestSearchOrchestrator:
         assert len(result.results) == 1
         assert result.results[0].source_domain == "good.com"
 
+    async def test_news_mode_fallback_to_generic_news_capable_backend(self) -> None:
+        """Line 133: fallback when no _NEWS_BACKENDS available but another backend supports news."""
+        news_results = [_make_result("http://custom-news.com")]
+        custom = _make_backend("custom_news", news_results)
+        custom.supports_news = True
+
+        registry = MagicMock(spec=SearchRegistry)
+
+        def _get(name: str) -> MagicMock | None:
+            if name in ("newsapi", "bing"):
+                return None  # primary news backends unavailable
+            return custom if name == "custom_news" else None
+
+        registry.get = MagicMock(side_effect=_get)
+        registry.names = MagicMock(return_value=["custom_news"])
+        orch = SearchOrchestrator(registry, SearchCache())
+        result = await orch.run(["breaking news"], news_mode=True)
+        assert result.results[0].url == "http://custom-news.com"
+
     async def test_news_mode_fallback_to_bing(self) -> None:
         bing_results = [_make_result("http://bing-news.com")]
         bing = _make_backend("bing", bing_results)
@@ -251,7 +271,11 @@ class TestSearchOrchestrator:
         registry = _make_registry(bing, ddg)
 
         def _get(name: str) -> MagicMock | None:
-            return None if name == "newsapi" else (bing if name == "bing" else ddg if name == "duckduckgo" else None)
+            return (
+                None
+                if name == "newsapi"
+                else (bing if name == "bing" else ddg if name == "duckduckgo" else None)
+            )
 
         registry.get = MagicMock(side_effect=_get)
         orch = SearchOrchestrator(registry, SearchCache())

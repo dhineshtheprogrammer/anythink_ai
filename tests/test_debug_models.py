@@ -138,6 +138,17 @@ def test_http_log_entry():
     assert "Bearer" in entry.request_headers["Authorization"]
 
 
+def test_api_overhead_ms_zero_when_no_first_token():
+    rec = _make_record(t_prompt_assembled=1.0, t_first_token=None)
+    assert rec.api_overhead_ms() == 0.0
+
+
+def test_api_overhead_ms_calculated():
+    t0 = time.monotonic()
+    rec = _make_record(t_prompt_assembled=t0, t_first_token=t0 + 0.200)
+    assert 190.0 < rec.api_overhead_ms() < 210.0
+
+
 def test_record_default_fields():
     rec = _make_record()
     assert rec.stop_reason is None

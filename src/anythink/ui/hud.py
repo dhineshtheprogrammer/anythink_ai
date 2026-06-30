@@ -98,6 +98,10 @@ class HUDWidget(Static):
     mmos_enabled: reactive[bool] = reactive(False)
     mmos_mode: reactive[str] = reactive("")
     mmos_strategy: reactive[str] = reactive("")
+    # --- MMWE ---
+    workflow_active: reactive[bool] = reactive(False)
+    # --- MMAE ---
+    smart_enabled: reactive[bool] = reactive(False)
 
     def __init__(self, theme: Theme, version: str, **kwargs: object) -> None:
         super().__init__("", **kwargs)  # type: ignore[arg-type]
@@ -199,6 +203,12 @@ class HUDWidget(Static):
     def watch_mmos_strategy(self) -> None:
         self._refresh_hud()
 
+    def watch_workflow_active(self) -> None:
+        self._refresh_hud()
+
+    def watch_smart_enabled(self) -> None:
+        self._refresh_hud()
+
     # ── public API ─────────────────────────────────────────────────────────────
 
     def update_from_state(
@@ -236,6 +246,9 @@ class HUDWidget(Static):
             self.mmos_enabled = s_live.enabled
             self.mmos_mode = s_live.mode
             self.mmos_strategy = s_live.mixing_mode
+
+        # MMAE
+        self.smart_enabled = getattr(ctx, "smart_enabled", False)
 
     # ── rendering ─────────────────────────────────────────────────────────────
 
@@ -370,5 +383,15 @@ class HUDWidget(Static):
             mode_label = self.mmos_mode.upper() if self.mmos_mode else "AUTO"
             strategy_label = self.mmos_strategy if self.mmos_strategy else "routing"
             line.append(f"[{mode_label} · {strategy_label}]", style=ha)
+
+        # MMWE indicator — only shown while a workflow is running
+        if self.workflow_active:
+            line.append_text(sep)
+            line.append("[⚙ WORKFLOW]", style="bold yellow")
+
+        # MMAE indicator — shown whenever Smart mode is on
+        if self.smart_enabled:
+            line.append_text(sep)
+            line.append("✦ Smart: ON", style=ha)
 
         return line

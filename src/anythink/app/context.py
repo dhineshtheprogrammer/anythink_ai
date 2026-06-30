@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import IO
 
 from rich.console import Console
@@ -44,12 +45,32 @@ from anythink.tools.base import ApprovalMode
 from anythink.tools.runner import ToolRunner
 from anythink.ui.console import make_console
 from anythink.ui.theme import Theme, get_theme
+from anythink.workflow.engine import WorkflowEngine
+from anythink.workflow.log import WorkflowLogger
+from anythink.workflow.loop import LoopExecutor
+from anythink.workflow.manifest import CapabilityManifest
+from anythink.workflow.optimizer import StageOutputOptimizer
+from anythink.workflow.planner import WorkflowPlanner
+from anythink.workflow.registry import WorkflowCapabilityRegistry
+from anythink.workflow.router import MetaRouter
+from anythink.workflow.storage import WorkflowStorage
+from anythink.smart.engine import SmartEngine
+from anythink.smart.registry import SmartRegistry
 
 # Known vision-capable model ID fragments — used to decide whether to pass
 # vision_capable=True to WindowsScreenshotServer.
 _VISION_MODEL_HINTS = frozenset(
-    {"claude-3", "claude-4", "claude-sonnet", "claude-opus", "claude-haiku",
-     "gpt-4o", "gemini", "gpt-4-vision", "llava"}
+    {
+        "claude-3",
+        "claude-4",
+        "claude-sonnet",
+        "claude-opus",
+        "claude-haiku",
+        "gpt-4o",
+        "gemini",
+        "gpt-4-vision",
+        "llava",
+    }
 )
 
 
@@ -61,13 +82,14 @@ def _check_vision_capable(config: AppConfig) -> bool:
     return any(hint in alias_lower for hint in _VISION_MODEL_HINTS)
 
 
-def _build_windows_servers(config: AppConfig, paths: "Paths") -> list:  # type: ignore[type-arg]
+def _build_windows_servers(config: AppConfig, paths: Paths) -> list:  # type: ignore[type-arg]
     """Return the 10 Windows MCP servers when running on Windows with windows_enabled=True.
 
     All imports are deferred so non-Windows platforms never load Windows-only code.
     Returns an empty list on non-Windows or when the feature is disabled.
     """
     import sys as _sys
+
     if _sys.platform != "win32" or not config.windows_enabled:
         return []
 
@@ -163,6 +185,15 @@ class AppContext:
     plan_engine: PlanEngine
     plan_runner: PlanRunner
     mixing_orchestrator: MixingOrchestrator
+    # --- MMWE ---
+    workflow_registry: WorkflowCapabilityRegistry
+    workflow_storage: WorkflowStorage
+    workflow_manifest: CapabilityManifest
+    workflow_engine: WorkflowEngine
+    # --- MMAE ---
+    smart_registry: SmartRegistry
+    smart_engine: SmartEngine
+    smart_enabled: bool
 
     @classmethod
     def create(
@@ -267,6 +298,65 @@ class AppContext:
             plan_runner=plan_runner,
         )
 
+        # MMWE subsystems — extracted so planner/router can share the same instances
+        model_registry = ModelRegistry(path=resolved.models_file)
+        provider_registry = ProviderRegistry()
+
+        workflow_registry = WorkflowCapabilityRegistry(
+            path=resolved.config_dir / "workflow_capabilities.yaml"
+        )
+        workflow_storage = WorkflowStorage(workflows_dir=resolved.config_dir / "workflows")
+        workflow_manifest = CapabilityManifest(
+            manifest_path=resolved.config_dir / "workflow_manifest.txt"
+        )
+        workflow_planner = WorkflowPlanner(
+            manifest=workflow_manifest,
+            model_registry=model_registry,
+            key_manager=key_manager,
+            provider_registry=provider_registry,
+        )
+        workflow_router = MetaRouter(
+            workflow_registry=workflow_registry,
+            model_registry=model_registry,
+        )
+        _wf_log_dir = (
+            resolved.data_dir / config.workflow_log_dir
+            if config.workflow_log_dir
+            else resolved.data_dir / "workflow_logs"
+        )
+        workflow_logger = WorkflowLogger(log_dir=_wf_log_dir)
+        workflow_engine = WorkflowEngine(
+            planner=workflow_planner,
+            router=workflow_router,
+            optimizer=StageOutputOptimizer(),
+            loop_executor=LoopExecutor(),
+            logger=workflow_logger,
+            storage=workflow_storage,
+        )
+        workflow_manifest.refresh(model_registry, mcp_manager, workflow_registry, workflow_storage)
+
+        # MMAE subsystems
+        _smart_registry_path = (
+            Path(config.smart_registry_file)
+            if config.smart_registry_file
+            else resolved.smart_registry_file
+        )
+        smart_registry = SmartRegistry(_smart_registry_path)
+        smart_registry.load()
+        if not smart_registry.has_any_assignments():
+            smart_registry.auto_populate(workflow_registry)
+
+        smart_engine = SmartEngine(
+            registry=smart_registry,
+            provider_registry=provider_registry,
+            model_registry=model_registry,
+            key_manager=key_manager,
+            debug_manager=debug_manager,
+            spend_tracker=spend_tracker,
+            quality_threshold=config.smart_quality_threshold,
+            max_splits=config.smart_max_splits,
+        )
+
         return cls(
             config=config,
             paths=resolved,
@@ -274,8 +364,8 @@ class AppContext:
             theme=theme,
             config_manager=config_manager,
             key_manager=key_manager,
-            provider_registry=ProviderRegistry(),
-            model_registry=ModelRegistry(path=resolved.models_file),
+            provider_registry=provider_registry,
+            model_registry=model_registry,
             persona_manager=PersonaManager(path=resolved.personas_file),
             session_manager=session_manager,
             search_registry=search_reg,
@@ -299,4 +389,11 @@ class AppContext:
             plan_engine=plan_engine,
             plan_runner=plan_runner,
             mixing_orchestrator=mixing_orchestrator,
+            workflow_registry=workflow_registry,
+            workflow_storage=workflow_storage,
+            workflow_manifest=workflow_manifest,
+            workflow_engine=workflow_engine,
+            smart_registry=smart_registry,
+            smart_engine=smart_engine,
+            smart_enabled=config.smart_default_state,
         )

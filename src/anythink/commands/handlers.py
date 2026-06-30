@@ -240,6 +240,16 @@ def register_commands(registry: CommandRegistry) -> None:
 
     register_optimize_commands(registry)
 
+    # ── MMWE workflow commands ─────────────────────────────────────────────
+    from anythink.workflow.commands import register_workflow_commands
+
+    register_workflow_commands(registry)
+
+    # ── MMAE smart commands ────────────────────────────────────────────────
+    from anythink.smart.commands import register_smart_commands
+
+    register_smart_commands(registry)
+
     registry.register(
         SlashCommand(
             "preview",

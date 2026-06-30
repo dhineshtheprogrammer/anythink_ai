@@ -60,7 +60,9 @@ class AppConfig:
     rag_chunk_overlap: int = 100  # overlap tokens (session-level default)
     rag_quality_indicators: bool = True  # show confidence scores in response footer
     rag_confidence_display: bool = True  # show per-chunk relevance in expanded view
-    rag_no_match_behavior: str = "graceful"  # "graceful" (3-option menu) | "passthrough" (ignore RAG)
+    rag_no_match_behavior: str = (
+        "graceful"  # "graceful" (3-option menu) | "passthrough" (ignore RAG)
+    )
 
     # --- Enhanced Web Search fields ---
     search_default_enabled: bool = False  # global default; per-session toggle lives in ChatState
@@ -106,6 +108,23 @@ class AppConfig:
     windows_screenshot_max_px: int = 1920
     windows_notification_app_name: str = "Anythink"
     windows_apps_cache_ttl_minutes: int = 60
+
+    # --- MMWE (Multi-Model Workflow Engine) ---
+    workflow_planner_model: str = ""  # model alias for planner; "" = auto-select
+    workflow_log_dir: str = ""  # override log dir; "" = XDG default
+    workflow_autonomy_mode: str = "confirm"  # "confirm" | "auto"
+
+    # --- MMAE (Multi-Model Answering Engine) ---
+    smart_default_state: bool = False  # off by default at session start
+    smart_combiner_mode: str = "stitch"  # "stitch" | "merge"
+    smart_quality_threshold: int = 50  # 0–100; responses below this score are retried
+    smart_max_splits: int = 5  # maximum sub-questions per turn
+    smart_session_format: str = ""  # "" = no default format; e.g. "markdown", "table"
+    smart_show_detail: bool = True  # show ✦ N specialists footer below responses
+    smart_router_model: str = ""  # model alias; "" = use default_model_alias
+    smart_combiner_model: str = ""  # model alias for combiner; "" = use default_model_alias
+    smart_formatter_model: str = ""  # model alias for formatter; "" = use combiner alias
+    smart_registry_file: str = ""  # path to smart_registry.yaml; "" = XDG default
 
     VALID_THEMES: frozenset[str] = field(
         default=frozenset(

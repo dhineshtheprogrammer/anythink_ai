@@ -112,6 +112,12 @@ class Paths:
     def plans_dir(self) -> Path:
         return self.data_dir / "plans"
 
+    # --- MMAE paths ---
+
+    @property
+    def smart_registry_file(self) -> Path:
+        return self.config_dir / "smart_registry.yaml"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.config_dir,
@@ -186,6 +192,8 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     # Enhanced Web Search
     "search_mode": frozenset({"general", "news"}),
     "search_safe_search": frozenset({"strict", "moderate", "off"}),
+    # MMWE
+    "workflow_autonomy_mode": frozenset({"confirm", "auto"}),
 }
 
 
