@@ -192,7 +192,7 @@ class WindowsExplorerServer(BuiltinMCPServer):
             except (ImportError, Exception):
                 # Fallback: open folder and select first file via /select,
                 if file_paths:
-                    subprocess.Popen(["explorer.exe", "/select,", file_paths[0]])
+                    subprocess.Popen(["explorer.exe", f"/select,{file_paths[0]}"])
                     opened.append(f"Opened Explorer in '{parent}' (fallback — first file selected).")
 
         return "\n".join(opened) if opened else "No files to open."

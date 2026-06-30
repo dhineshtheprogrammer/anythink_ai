@@ -49,6 +49,10 @@ class ChatState:
     tokens_estimated: bool = False  # True when token count is client-side estimate
     gen_params: GenerationParams | None = None  # V3: active generation params
 
+    # ── Enhanced Web Search session state ─────────────────────────────────
+    search_mode: str = "general"  # "general" | "news"
+    _search_rag_conflict_acked: bool = False
+
     # ── Phase 3: conversation branching ───────────────────────────────────
     active_branch: str = "main"
     # Branch name → message list (shares reference with `history` for "main")
@@ -97,6 +101,52 @@ def _format_search_results(results: list[SearchResult], query: str) -> str:
         if r.snippet:
             lines.append(f"   {r.snippet}")
     return "\n".join(lines)
+
+
+def _freshness_to_date(freshness: str | None) -> str | None:
+    """Convert freshness shorthand (24h/7d/30d/3m) to an ISO date string."""
+    if freshness is None or freshness == "off":
+        return None
+    import datetime
+
+    now = datetime.date.today()
+    _map = {"24h": 1, "7d": 7, "30d": 30, "3m": 90}
+    if freshness in _map:
+        return (now - datetime.timedelta(days=_map[freshness])).isoformat()
+    return freshness  # already an ISO date or custom value
+
+
+def _history_context(state: ChatState) -> str:
+    """Return a brief context string from recent history for query rewriting."""
+    parts: list[str] = []
+    for msg in state.history[-6:]:
+        if isinstance(msg.content, str):
+            text = msg.content[:200]
+        elif isinstance(msg.content, list):
+            text = " ".join(
+                p.text[:100] for p in msg.content if hasattr(p, "text") and p.text
+            )[:200]
+        else:
+            text = ""
+        if text:
+            parts.append(f"{msg.role}: {text}")
+    return "\n".join(parts)
+
+
+def _inject_search_context(state: ChatState, results: list[SearchResult], query: str) -> None:
+    """Prepend formatted search results to the last user message in history."""
+    if not state.history:
+        return
+    last_msg = state.history[-1]
+    existing: list[ContentPart] = (
+        last_msg.content
+        if isinstance(last_msg.content, list)
+        else [TextPart(last_msg.content)]
+    )
+    state.history[-1] = ChatMessage(
+        role="user",
+        content=[TextPart(_format_search_results(results, query)), *existing],
+    )
 
 
 def _build_session(state: ChatState) -> Session:
@@ -189,18 +239,44 @@ class ChatApp:
             extra_parts: list[ContentPart] = []
 
             if state.search_enabled:
-                backend = ctx.search_registry.get_available(ctx.config.search_provider)
-                if backend is not None:
-                    try:
-                        search_results = await backend.search(stripped)
-                        if search_results:
-                            extra_parts.append(
-                                TextPart(_format_search_results(search_results, stripped))
-                            )
-                    except SearchError as exc:
-                        ctx.console.print(
-                            Text(f"  [Search failed: {exc.user_message}]", style=ctx.theme.error)
+                if ctx.config.search_cache_enabled:
+                    ctx.search_cache.evict_expired()
+                ctx.console.print(Text("  Searching…", style=ctx.theme.muted))
+                raw_queries = [stripped]
+                if ctx.config.search_query_rewrite:
+                    from anythink.search.rewriter import QueryRewriter
+
+                    _rewriter = QueryRewriter(state.provider, state.model_id)
+                    raw_queries = await _rewriter.rewrite_multi(
+                        stripped, _history_context(state)
+                    )
+                try:
+                    _orch = await ctx.search_orchestrator.run(
+                        raw_queries,
+                        date_from=_freshness_to_date(ctx.config.search_freshness),
+                        safe_search=ctx.config.search_safe_search,
+                        include_domains=list(ctx.config.search_include_domains),
+                        exclude_domains=list(ctx.config.search_exclude_domains),
+                        news_mode=(state.search_mode == "news"),
+                    )
+                    if _orch.results:
+                        extra_parts.append(
+                            TextPart(_format_search_results(_orch.results, stripped))
                         )
+                        ctx.console.print(
+                            Text(
+                                f"  Found {len(_orch.results)} results · {_orch.elapsed_s:.1f}s",
+                                style=ctx.theme.muted,
+                            )
+                        )
+                    else:
+                        ctx.console.print(
+                            Text("  No search results found.", style=ctx.theme.muted)
+                        )
+                except SearchError as exc:
+                    ctx.console.print(
+                        Text(f"  [Search failed: {exc.user_message}]", style=ctx.theme.error)
+                    )
 
             for att in state.pending_attachments:
                 if isinstance(att, TextAttachment):
@@ -340,6 +416,6 @@ class ChatApp:
             provider=provider,
             model_id=alias.model_id,
             context_window=alias.context_window,
-            search_enabled=ctx.config.web_search_enabled,
+            search_enabled=ctx.config.search_default_enabled,
             gen_params=alias.gen_params,
         )

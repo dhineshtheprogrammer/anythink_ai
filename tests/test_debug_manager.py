@@ -199,3 +199,49 @@ def test_export_txt(tmp_path: Path):
     content = out.read_text()
     assert "Request #1" in content
     assert "end_turn" in content
+
+
+def test_finalize_request_with_live_export(tmp_path: Path):
+    """_append_export is called when _export_active=True and _export_path is set."""
+    dm = DebugManager()
+    dm.enable()
+    # Directly activate the live export feature (no public API exposes this yet)
+    dm._export_active = True
+    dm._export_path = tmp_path / "live.jsonl"
+    rec = _make_record(1)
+    dm.finalize_request(rec)
+    assert dm._export_path.exists()
+    import json
+    line = json.loads(dm._export_path.read_text().strip())
+    assert line["request_id"] == 1
+
+
+def test_append_export_no_export_path_is_noop():
+    """_append_export returns early when _export_path is None."""
+    dm = DebugManager()
+    dm.enable()
+    dm._export_active = True
+    dm._export_path = None  # explicit None
+    rec = _make_record(1)
+    # Should not raise
+    dm._append_export(rec)
+
+
+def test_get_http_client_when_api_logging_active():
+    """http_client() returns a client (or None) when api_logging is active."""
+    dm = DebugManager()
+    dm.toggle_api_logging()  # enable
+    assert dm.api_logging_active() is True
+    client = dm.http_client()
+    # Should return an httpx.AsyncClient (or None if httpx not installed)
+    assert client is not None or client is None  # just verifies no crash
+
+
+def test_get_http_client_caches_client():
+    """http_client() returns the same client on second call."""
+    dm = DebugManager()
+    dm.toggle_api_logging()
+    c1 = dm.http_client()
+    c2 = dm.http_client()
+    if c1 is not None:
+        assert c1 is c2

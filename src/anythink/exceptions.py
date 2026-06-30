@@ -106,3 +106,36 @@ class BatchError(AnythinkError):
 
 class UpdateError(AnythinkError):
     """Raised when a self-update operation fails."""
+
+
+# --- V3.2 exceptions ---
+
+
+class DebugError(AnythinkError):
+    """Raised when a debug operation fails."""
+
+
+# --- MMWE exceptions ---
+
+
+class WorkflowError(AnythinkError):
+    """Raised when a workflow operation fails."""
+
+
+class WorkflowPlanError(WorkflowError):
+    """Raised when the planner cannot produce a valid plan."""
+
+
+class WorkflowStageError(WorkflowError):
+    """Raised when a stage execution fails unrecoverably."""
+
+    def __init__(self, message: str, stage_id: str, user_message: str | None = None) -> None:
+        super().__init__(message, user_message)
+        self.stage_id = stage_id
+
+
+# --- MMAE exceptions ---
+
+
+class SmartError(AnythinkError):
+    """Raised when an MMAE (Multi-Model Answering Engine) operation fails."""

@@ -35,7 +35,11 @@ _SETTINGS: list[tuple[str, str, list[str] | None]] = [
     # Model & Defaults
     ("Default model alias", "default_model_alias", None),
     # Tools & Agent Behaviour
-    ("Web search (default)", "web_search_enabled", ["on", "off"]),
+    ("Search (default on)", "search_default_enabled", ["on", "off"]),
+    ("Search safe search", "search_safe_search", ["moderate", "strict", "off"]),
+    ("Search cache", "search_cache_enabled", ["on", "off"]),
+    ("Search preview", "search_preview", ["on", "off"]),
+    ("Search max/response", "search_max_per_response", None),
     ("Code execution approval", "exec_mode", ["ask", "auto"]),
     ("Browse approval", "browse_autonomy", ["ask", "auto"]),
     ("Browse mode", "browse_mode", ["http", "headless"]),

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from io import StringIO
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -516,44 +516,32 @@ class TestMultimodalMessages:
 # ── web search integration ────────────────────────────────────────────────────
 
 
-class _MockSearchBackend:
-    """Minimal search backend for chat-loop tests."""
-
-    name = "mock"
-    display_name = "Mock"
-
-    def __init__(
-        self,
-        results: list[Any] | None = None,
-        *,
-        raises: bool = False,
-    ) -> None:
-        self._results = results or []
-        self._raises = raises
-
-    def is_available(self) -> bool:
-        return True
-
-    async def search(self, query: str, max_results: int = 5) -> list[Any]:
-        from anythink.exceptions import SearchError
-
-        if self._raises:
-            raise SearchError("search failed", user_message="search failed")
-        return self._results
-
-
 def _make_search_ctx(
     ctx: AppContext,
     results: list[Any] | None = None,
     *,
     raises: bool = False,
 ) -> AppContext:
-    """Wire a mock search backend into *ctx*."""
-    from anythink.search.registry import SearchRegistry
+    """Wire a mock search orchestrator into *ctx*."""
+    from anythink.exceptions import SearchError
+    from anythink.search.orchestrator import OrchestratorResult
 
-    r = SearchRegistry()
-    r.register(_MockSearchBackend(results=results, raises=raises))
-    ctx.search_registry = r
+    if raises:
+        ctx.search_orchestrator.run = AsyncMock(  # type: ignore[method-assign]
+            side_effect=SearchError("search failed", user_message="search failed")
+        )
+    else:
+        _orch_results = results or []
+        ctx.search_orchestrator.run = AsyncMock(  # type: ignore[method-assign]
+            return_value=OrchestratorResult(
+                queries=["q"],
+                results=_orch_results,
+                from_cache=[False],
+                backend_used="mock",
+                elapsed_s=0.1,
+                error=None,
+            )
+        )
     return ctx
 
 
@@ -611,13 +599,8 @@ class TestSearchIntegration:
     async def test_search_disabled_sends_plain_string(
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
-        from anythink.search.base import SearchResult
-
-        results = [SearchResult(title="T", url="https://t.com", snippet="S")]
-        _make_search_ctx(ctx, results=results)
-
         state = _make_state(text="response")
-        state.search_enabled = False  # explicitly off
+        state.search_enabled = False
 
         with (
             patch.object(ChatApp, "_resolve_state", return_value=state),
@@ -648,15 +631,23 @@ class TestSearchIntegration:
             code = await ChatApp(ctx, command_registry=registry).run()
 
         assert code == 0
-        # Message still sent despite search failure
         assert len(state.history) >= 1
 
     async def test_search_no_backend_sends_plain_message(
         self, ctx: AppContext, registry: CommandRegistry
     ) -> None:
-        from anythink.search.registry import SearchRegistry
+        from anythink.search.orchestrator import OrchestratorResult
 
-        ctx.search_registry = SearchRegistry()  # empty — no backends
+        ctx.search_orchestrator.run = AsyncMock(  # type: ignore[method-assign]
+            return_value=OrchestratorResult(
+                queries=["hi"],
+                results=[],
+                from_cache=[],
+                backend_used="",
+                elapsed_s=0.0,
+                error="No backend",
+            )
+        )
 
         state = _make_state(text="response")
         state.search_enabled = True
@@ -671,3 +662,273 @@ class TestSearchIntegration:
 
         user_msg = state.history[0]
         assert isinstance(user_msg.content, str)
+
+
+# ── helper unit tests ─────────────────────────────────────────────────────────
+
+
+class TestFreshnessToDate:
+    def test_none_returns_none(self) -> None:
+        from anythink.app.chat import _freshness_to_date
+
+        assert _freshness_to_date(None) is None
+
+    def test_off_returns_none(self) -> None:
+        from anythink.app.chat import _freshness_to_date
+
+        assert _freshness_to_date("off") is None
+
+    def test_24h_returns_yesterday(self) -> None:
+        import datetime
+
+        from anythink.app.chat import _freshness_to_date
+
+        result = _freshness_to_date("24h")
+        assert result is not None
+        expected = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+        assert result == expected
+
+    def test_7d(self) -> None:
+        import datetime
+
+        from anythink.app.chat import _freshness_to_date
+
+        result = _freshness_to_date("7d")
+        assert result == (datetime.date.today() - datetime.timedelta(days=7)).isoformat()
+
+    def test_30d(self) -> None:
+        import datetime
+
+        from anythink.app.chat import _freshness_to_date
+
+        result = _freshness_to_date("30d")
+        assert result == (datetime.date.today() - datetime.timedelta(days=30)).isoformat()
+
+    def test_3m(self) -> None:
+        import datetime
+
+        from anythink.app.chat import _freshness_to_date
+
+        result = _freshness_to_date("3m")
+        assert result == (datetime.date.today() - datetime.timedelta(days=90)).isoformat()
+
+    def test_custom_date_passthrough(self) -> None:
+        from anythink.app.chat import _freshness_to_date
+
+        assert _freshness_to_date("2026-01-01") == "2026-01-01"
+
+
+class TestHistoryContext:
+    def test_empty_history_returns_empty_string(self) -> None:
+        from anythink.app.chat import _history_context
+
+        state = _make_state()
+        assert _history_context(state) == ""
+
+    def test_string_content_message(self) -> None:
+        from anythink.app.chat import _history_context
+        from anythink.providers.base import ChatMessage
+
+        state = _make_state()
+        state.history.append(ChatMessage(role="user", content="hello world"))
+        result = _history_context(state)
+        assert "user: hello world" in result
+
+    def test_list_content_message(self) -> None:
+        from anythink.app.chat import _history_context
+        from anythink.providers.base import ChatMessage, TextPart
+
+        state = _make_state()
+        state.history.append(
+            ChatMessage(role="assistant", content=[TextPart("the answer is 42")])
+        )
+        result = _history_context(state)
+        assert "assistant" in result
+        assert "the answer is 42" in result
+
+    def test_limits_to_last_six_messages(self) -> None:
+        from anythink.app.chat import _history_context
+        from anythink.providers.base import ChatMessage
+
+        state = _make_state()
+        for i in range(10):
+            state.history.append(ChatMessage(role="user", content=f"msg {i}"))
+        result = _history_context(state)
+        assert "msg 4" in result
+        assert "msg 9" in result
+        assert "msg 0" not in result
+
+
+class TestInjectSearchContext:
+    def test_prepends_search_results_to_string_content(self) -> None:
+        from anythink.app.chat import _inject_search_context
+        from anythink.providers.base import ChatMessage, TextPart
+        from anythink.search.base import SearchResult
+
+        state = _make_state()
+        state.history.append(ChatMessage(role="user", content="what is python?"))
+        results = [SearchResult(title="Python", url="https://python.org", snippet="A language")]
+
+        _inject_search_context(state, results, "what is python?")
+
+        assert isinstance(state.history[-1].content, list)
+        parts = state.history[-1].content
+        assert isinstance(parts[0], TextPart)
+        assert "[Web Search:" in parts[0].text
+        assert "Python" in parts[0].text
+
+    def test_prepends_to_list_content(self) -> None:
+        from anythink.app.chat import _inject_search_context
+        from anythink.providers.base import ChatMessage, TextPart
+        from anythink.search.base import SearchResult
+
+        state = _make_state()
+        state.history.append(
+            ChatMessage(role="user", content=[TextPart("original message")])
+        )
+        results = [SearchResult(title="T", url="https://t.com", snippet="S")]
+
+        _inject_search_context(state, results, "query")
+
+        parts = state.history[-1].content
+        assert len(parts) == 2
+        assert isinstance(parts[0], TextPart)
+        assert "[Web Search:" in parts[0].text
+        assert isinstance(parts[1], TextPart)
+        assert "original message" in parts[1].text
+
+    def test_no_op_on_empty_history(self) -> None:
+        from anythink.app.chat import _inject_search_context
+        from anythink.search.base import SearchResult
+
+        state = _make_state()
+        results = [SearchResult(title="T", url="u", snippet="s")]
+        _inject_search_context(state, results, "q")
+        assert state.history == []
+
+
+class TestTrimHistory:
+    def test_trim_drops_old_messages_when_over_budget(self) -> None:
+        from anythink.app.chat import _trim_history
+        from anythink.providers.base import ChatMessage
+
+        # Create a tiny context window so messages get trimmed
+        short_context = 50  # 50 tokens * 3.5 chars = 175 chars budget
+        history = [
+            ChatMessage(role="user", content="A" * 200),   # too big
+            ChatMessage(role="user", content="B" * 200),   # too big
+            ChatMessage(role="user", content="short"),     # small — kept
+        ]
+        trimmed = _trim_history(history, short_context)
+        # Only short messages should survive
+        assert any("short" in str(m.content) for m in trimmed)
+        # Long messages at start should be dropped
+        assert not any("A" * 200 == m.content for m in trimmed)
+
+    def test_trim_preserves_system_messages(self) -> None:
+        from anythink.app.chat import _trim_history
+        from anythink.providers.base import ChatMessage
+
+        short_context = 50
+        history = [
+            ChatMessage(role="system", content="You are a helpful assistant."),
+            ChatMessage(role="user", content="A" * 200),
+        ]
+        trimmed = _trim_history(history, short_context)
+        # System message always preserved
+        assert any(m.role == "system" for m in trimmed)
+
+
+class TestHistoryContextElseBranch:
+    def test_non_str_non_list_content_produces_no_text(self) -> None:
+        from anythink.app.chat import _history_context
+        from anythink.providers.base import ChatMessage
+
+        state = _make_state()
+        # Inject a ChatMessage with integer content to hit the else branch
+        msg = ChatMessage(role="user", content="hello")
+        object.__setattr__(msg, "content", 42)  # bypass frozen dataclass
+        state.history.append(msg)
+        result = _history_context(state)
+        # Line 130 (else: text = "") should be hit; message is skipped
+        assert result == "" or "user:" not in result
+
+
+class TestSpendBudgetWarnings:
+    async def test_run_warns_when_spend_limit_exceeded(self, ctx: AppContext) -> None:
+        from dataclasses import replace
+
+        usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        state = _make_state(usage=usage)
+        ctx.config = replace(
+            ctx.config,
+            spend_budget_soft_limit=0.001,
+            spend_budget_period="monthly",
+            spend_tracking=True,
+        )
+        buf = StringIO()
+        ctx.console._file = buf  # type: ignore[attr-defined]
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["Hello", "/exit"]),
+            ),
+            patch.object(ctx.spend_tracker, "monthly_total", return_value=1.0),
+            patch("anythink.spend.pricing.estimate_cost", return_value=0.001),
+        ):
+            await ChatApp(ctx).run()
+        output = buf.getvalue()
+        assert "limit" in output.lower() or "spend" in output.lower()
+
+    async def test_run_warns_when_approaching_spend_limit(self, ctx: AppContext) -> None:
+        from dataclasses import replace
+
+        usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        state = _make_state(usage=usage)
+        ctx.config = replace(
+            ctx.config,
+            spend_budget_soft_limit=1.0,
+            spend_budget_period="monthly",
+            spend_tracking=True,
+        )
+        buf = StringIO()
+        ctx.console._file = buf  # type: ignore[attr-defined]
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["Hello", "/exit"]),
+            ),
+            patch.object(ctx.spend_tracker, "monthly_total", return_value=0.85),
+            patch("anythink.spend.pricing.estimate_cost", return_value=0.001),
+        ):
+            await ChatApp(ctx).run()
+        output = buf.getvalue()
+        assert "limit" in output.lower() or "spend" in output.lower()
+
+    async def test_run_daily_spend_limit_exceeded(self, ctx: AppContext) -> None:
+        from dataclasses import replace
+
+        usage = TokenUsage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+        state = _make_state(usage=usage)
+        ctx.config = replace(
+            ctx.config,
+            spend_budget_soft_limit=0.001,
+            spend_budget_period="daily",
+            spend_tracking=True,
+        )
+        buf = StringIO()
+        ctx.console._file = buf  # type: ignore[attr-defined]
+        with (
+            patch.object(ChatApp, "_resolve_state", return_value=state),
+            patch(
+                "anythink.app.chat.make_prompt_session",
+                return_value=MockSession(["Hello", "/exit"]),
+            ),
+            patch.object(ctx.spend_tracker, "daily_total", return_value=1.0),
+            patch("anythink.spend.pricing.estimate_cost", return_value=0.001),
+        ):
+            await ChatApp(ctx).run()
+        output = buf.getvalue()
+        assert "limit" in output.lower() or "spend" in output.lower()

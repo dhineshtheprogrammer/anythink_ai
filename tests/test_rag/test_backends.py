@@ -363,3 +363,41 @@ class TestLanceVectorStore(_BackendContractMixin):
 
         store = LanceVectorStore()
         assert store.supports_metadata_filter() is True
+
+
+class TestRegistryEdgeCases:
+    def test_get_backend_class_import_error_falls_back(self) -> None:
+        from unittest.mock import patch
+
+        from anythink.rag.backends.registry import get_backend_class
+        from anythink.rag.backends.pure import PureVectorStore
+
+        with patch("importlib.import_module", side_effect=ImportError("no faiss")):
+            cls = get_backend_class("faiss")
+        assert cls is PureVectorStore
+
+    def test_is_backend_available_falls_back_returns_false(self) -> None:
+        from unittest.mock import patch
+
+        from anythink.rag.backends.registry import is_backend_available
+        from anythink.rag.backends.pure import PureVectorStore
+
+        with patch("anythink.rag.backends.registry.get_backend_class", return_value=PureVectorStore):
+            result = is_backend_available("faiss")
+        assert result is False
+
+    def test_is_backend_available_no_is_available_method_returns_true(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from anythink.rag.backends.registry import is_backend_available
+
+        class FakeCls:
+            name = "FakeCls"
+            __name__ = "FakeCls"
+
+            def __init__(self):
+                pass
+
+        with patch("anythink.rag.backends.registry.get_backend_class", return_value=FakeCls):
+            result = is_backend_available("fake")
+        assert result is True

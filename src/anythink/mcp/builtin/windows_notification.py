@@ -155,16 +155,20 @@ class WindowsNotificationServer(BuiltinMCPServer):
             pass
 
         # Final fallback: PowerShell
+        # Escape single quotes to prevent PS string breakage (PS escapes ' as '')
         import subprocess
+        ps_title = title.replace("'", "''")
+        ps_message = message.replace("'", "''")
+        ps_app_name = self._app_name.replace("'", "''")
         ps = (
             f"[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, "
             f"ContentType = WindowsRuntime] | Out-Null;"
             f"$t = [Windows.UI.Notifications.ToastTemplateType]::ToastText02;"
             f"$x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($t);"
-            f"$x.GetElementsByTagName('text')[0].AppendChild($x.CreateTextNode('{title}')) | Out-Null;"
-            f"$x.GetElementsByTagName('text')[1].AppendChild($x.CreateTextNode('{message}')) | Out-Null;"
+            f"$x.GetElementsByTagName('text')[0].AppendChild($x.CreateTextNode('{ps_title}')) | Out-Null;"
+            f"$x.GetElementsByTagName('text')[1].AppendChild($x.CreateTextNode('{ps_message}')) | Out-Null;"
             f"$n = [Windows.UI.Notifications.ToastNotification]::new($x);"
-            f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{self._app_name}').Show($n)"
+            f"[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('{ps_app_name}').Show($n)"
         )
         try:
             result = subprocess.run(

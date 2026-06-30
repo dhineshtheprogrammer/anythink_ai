@@ -102,3 +102,13 @@ class TestOpenAIEmbed:
             result = await backend.embed(["hello", "world"])
         assert result[0][0] == pytest.approx(0.1)
         assert result[1][0] == pytest.approx(0.2)
+
+
+class TestOpenAIKeyringException:
+    def test_keyring_exception_falls_back_to_env(self) -> None:
+        import os
+
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        with patch.dict(os.environ, env, clear=True):
+            with patch("keyring.get_password", side_effect=Exception("keyring error")):
+                assert OpenAIEmbeddingBackend().is_available() is False

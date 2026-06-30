@@ -93,6 +93,8 @@ def _make_mock_ctx() -> object:
     ctx.provider_registry = MagicMock()
     ctx.model_registry = MagicMock()
     ctx.persona_manager = MagicMock()
+    # New in MMWE/MMAE commit — must be False so normal chat path is taken
+    ctx.smart_enabled = False
     return ctx
 
 

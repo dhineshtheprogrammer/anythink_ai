@@ -8,7 +8,11 @@ import pytest
 
 from anythink.exceptions import SearchError
 from anythink.search.base import SearchResult
-from anythink.search.serpapi import SerpAPISearch
+from anythink.search.serpapi import (
+    SerpAPISearch,
+    _domain_from_url,
+    _freshness_to_tbs,
+)
 
 
 def _make_mock_client(json_data: dict, status_code: int = 200) -> MagicMock:
@@ -112,3 +116,58 @@ class TestSerpAPISearch:
         with patch("anythink.search.serpapi.httpx.AsyncClient", return_value=mock_client):
             with pytest.raises(SearchError, match="SerpAPI request error"):
                 await backend.search("python")
+
+
+class TestSerpAPIHelpers:
+    def test_freshness_to_tbs_known_values(self) -> None:
+        assert _freshness_to_tbs("24h") == "qdr:d"
+        assert _freshness_to_tbs("7d") == "qdr:w"
+        assert _freshness_to_tbs("30d") == "qdr:m"
+        assert _freshness_to_tbs("3m") == "qdr:m"
+
+    def test_freshness_to_tbs_unknown_defaults_to_week(self) -> None:
+        assert _freshness_to_tbs("unknown") == "qdr:w"
+
+    def test_domain_from_url_strips_www(self) -> None:
+        assert _domain_from_url("https://www.python.org/docs") == "python.org"
+
+    def test_domain_from_url_no_www(self) -> None:
+        assert _domain_from_url("https://docs.python.org") == "docs.python.org"
+
+    def test_domain_from_url_empty(self) -> None:
+        assert _domain_from_url("") is None
+
+    async def test_search_with_freshness_filter(self) -> None:
+        data = {"organic_results": [{"title": "T", "link": "http://u.com", "snippet": "s"}]}
+        client = _make_mock_client(data)
+        with patch("anythink.search.serpapi.httpx.AsyncClient", return_value=client):
+            results = await SerpAPISearch(api_key="k").search("python", date_from="7d")
+        assert len(results) == 1
+        call_str = str(client.get.call_args)
+        assert "qdr:w" in call_str
+
+    async def test_search_with_include_domains(self) -> None:
+        data = {"organic_results": [{"title": "T", "link": "http://u.com", "snippet": "s"}]}
+        client = _make_mock_client(data)
+        with patch("anythink.search.serpapi.httpx.AsyncClient", return_value=client):
+            await SerpAPISearch(api_key="k").search("python", include_domains=["docs.python.org"])
+        call_str = str(client.get.call_args)
+        assert "docs.python.org" in call_str
+
+    async def test_search_with_safe_search(self) -> None:
+        data = {"organic_results": []}
+        client = _make_mock_client(data)
+        with patch("anythink.search.serpapi.httpx.AsyncClient", return_value=client):
+            await SerpAPISearch(api_key="k").search("python", safe_search="strict")
+        call_str = str(client.get.call_args)
+        assert "active" in call_str
+
+    def test_domain_from_url_empty_host(self) -> None:
+        # URL with empty host after scheme
+        result = _domain_from_url("https:///path/to/resource")
+        assert result is None
+
+    def test_domain_from_url_exception_returns_none(self) -> None:
+        # Passing a non-str triggers exception → None
+        result = _domain_from_url(None)  # type: ignore[arg-type]
+        assert result is None

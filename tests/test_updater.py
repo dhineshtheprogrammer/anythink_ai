@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from anythink.updater import check_update, current_version, fetch_latest_version, run_upgrade
@@ -17,6 +18,14 @@ class TestCurrentVersion:
         with patch("anythink.updater.current_version") as mock:
             mock.return_value = "unknown"
             assert mock() == "unknown"
+
+    def test_returns_unknown_when_version_missing(self) -> None:
+        import types
+
+        fake_anythink = types.ModuleType("anythink")
+        with patch.dict(sys.modules, {"anythink": fake_anythink}):
+            ver = current_version()
+        assert ver == "unknown"
 
 
 class TestFetchLatestVersion:

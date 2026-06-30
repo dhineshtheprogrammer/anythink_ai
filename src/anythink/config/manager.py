@@ -112,6 +112,12 @@ class Paths:
     def plans_dir(self) -> Path:
         return self.data_dir / "plans"
 
+    # --- MMAE paths ---
+
+    @property
+    def smart_registry_file(self) -> Path:
+        return self.config_dir / "smart_registry.yaml"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.config_dir,
@@ -173,7 +179,9 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "spend_budget_period": frozenset({"daily", "monthly"}),
     # RAG V2
     "rag_retrieval_strategy": frozenset({"vector", "bm25", "hybrid", "mmr"}),
-    "rag_chunk_strategy": frozenset({"fixed", "sentence", "paragraph", "semantic", "code", "heading"}),
+    "rag_chunk_strategy": frozenset(
+        {"fixed", "sentence", "paragraph", "semantic", "code", "heading"}
+    ),
     "rag_no_match_behavior": frozenset({"graceful", "passthrough"}),
     # V4 MMOS
     "mmos_mode": frozenset({"online", "offline", "auto"}),
@@ -181,6 +189,11 @@ _ENUM_FIELDS: dict[str, frozenset[str]] = {
     "mmos_history_mode": frozenset({"semantic", "recency", "model_decides"}),
     "mmos_mixing_mode": frozenset({"routing", "ensemble", "chaining", "decompose"}),
     "mmos_orchestration": frozenset({"deterministic", "meta_llm", "auto"}),
+    # Enhanced Web Search
+    "search_mode": frozenset({"general", "news"}),
+    "search_safe_search": frozenset({"strict", "moderate", "off"}),
+    # MMWE
+    "workflow_autonomy_mode": frozenset({"confirm", "auto"}),
 }
 
 
@@ -208,7 +221,35 @@ def validate_config(raw: dict[str, Any]) -> list[ConfigError]:
                 ConfigError(f"Invalid '{name}' value '{val}'. Allowed: {sorted(allowed)}")
             )
 
-    for int_field, min_val in (("windows_screenshot_max_px", 1), ("windows_apps_cache_ttl_minutes", 1)):
+    # Enhanced Web Search — range validators
+    smp = raw.get("search_max_per_response")
+    if smp is not None:
+        try:
+            if not (1 <= int(smp) <= 20):
+                errors.append(ConfigError("'search_max_per_response' must be between 1 and 20"))
+        except (TypeError, ValueError):
+            errors.append(ConfigError("'search_max_per_response' must be an integer"))
+
+    sct = raw.get("search_cache_ttl_minutes")
+    if sct is not None:
+        try:
+            if not (1 <= int(sct) <= 1440):
+                errors.append(ConfigError("'search_cache_ttl_minutes' must be between 1 and 1440"))
+        except (TypeError, ValueError):
+            errors.append(ConfigError("'search_cache_ttl_minutes' must be an integer"))
+
+    spd = raw.get("search_preview_delay_s")
+    if spd is not None:
+        try:
+            if not (0.0 <= float(spd) <= 30.0):
+                errors.append(ConfigError("'search_preview_delay_s' must be between 0.0 and 30.0"))
+        except (TypeError, ValueError):
+            errors.append(ConfigError("'search_preview_delay_s' must be a number"))
+
+    for int_field, min_val in (
+        ("windows_screenshot_max_px", 1),
+        ("windows_apps_cache_ttl_minutes", 1),
+    ):
         val = raw.get(int_field)
         if val is not None and (not isinstance(val, int) or val < min_val):
             errors.append(ConfigError(f"'{int_field}' must be a positive integer, got {val!r}"))
@@ -260,10 +301,14 @@ class ConfigManager:
             "windows_blocked_apps", ["regedit.exe", "cmd.exe", "powershell.exe", "mmc.exe"]
         )
         windows_allowed: tuple[str, ...] = (
-            tuple(str(p) for p in windows_allowed_raw) if isinstance(windows_allowed_raw, list) else ()
+            tuple(str(p) for p in windows_allowed_raw)
+            if isinstance(windows_allowed_raw, list)
+            else ()
         )
         windows_blocked: tuple[str, ...] = (
-            tuple(str(p) for p in windows_blocked_raw) if isinstance(windows_blocked_raw, list) else ()
+            tuple(str(p) for p in windows_blocked_raw)
+            if isinstance(windows_blocked_raw, list)
+            else ()
         )
         windows_blocked_apps: tuple[str, ...] = (
             tuple(str(a) for a in windows_blocked_apps_raw)
@@ -318,6 +363,22 @@ class ConfigManager:
             mmos_plan_mode=bool(raw.get("mmos_plan_mode", True)),
             mmos_orchestration=str(raw.get("mmos_orchestration", "auto")),
             mmos_fallback_order=mmos_fallback,
+            # Enhanced Web Search
+            search_default_enabled=bool(
+                raw.get("search_default_enabled", raw.get("web_search_enabled", False))
+            ),
+            search_mode=str(raw.get("search_mode", "general")),
+            search_max_per_response=int(raw.get("search_max_per_response", 5)),
+            search_query_rewrite=bool(raw.get("search_query_rewrite", True)),
+            search_preview=bool(raw.get("search_preview", True)),
+            search_preview_delay_s=float(raw.get("search_preview_delay_s", 3.0)),
+            search_cache_enabled=bool(raw.get("search_cache_enabled", True)),
+            search_cache_ttl_minutes=int(raw.get("search_cache_ttl_minutes", 30)),
+            search_safe_search=str(raw.get("search_safe_search", "moderate")),
+            search_freshness=raw.get("search_freshness") or None,
+            search_include_domains=tuple(raw.get("search_include_domains", [])),
+            search_exclude_domains=tuple(raw.get("search_exclude_domains", [])),
+            search_max_page_chars=int(raw.get("search_max_page_chars", 15_000)),
             # Windows MCP fields
             windows_enabled=bool(raw.get("windows_enabled", False)),
             windows_gui_mode=bool(raw.get("windows_gui_mode", False)),
@@ -392,6 +453,24 @@ class ConfigManager:
         data["mmos_orchestration"] = config.mmos_orchestration
         if config.mmos_fallback_order:
             data["mmos_fallback_order"] = list(config.mmos_fallback_order)
+
+        # Enhanced Web Search
+        data["search_default_enabled"] = config.search_default_enabled
+        data["search_mode"] = config.search_mode
+        data["search_max_per_response"] = config.search_max_per_response
+        data["search_query_rewrite"] = config.search_query_rewrite
+        data["search_preview"] = config.search_preview
+        data["search_preview_delay_s"] = config.search_preview_delay_s
+        data["search_cache_enabled"] = config.search_cache_enabled
+        data["search_cache_ttl_minutes"] = config.search_cache_ttl_minutes
+        data["search_safe_search"] = config.search_safe_search
+        if config.search_freshness:
+            data["search_freshness"] = config.search_freshness
+        if config.search_include_domains:
+            data["search_include_domains"] = list(config.search_include_domains)
+        if config.search_exclude_domains:
+            data["search_exclude_domains"] = list(config.search_exclude_domains)
+        data["search_max_page_chars"] = config.search_max_page_chars
 
         # Windows MCP fields
         data["windows_enabled"] = config.windows_enabled

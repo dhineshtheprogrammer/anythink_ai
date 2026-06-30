@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from anythink.optimize.models import TurnMMOSMetadata
     from anythink.rag.models import RetrievalResult
     from anythink.rag.quality import RetrievalQuality
+    from anythink.smart.models import SmartResult
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -179,6 +180,8 @@ class AIBubble(Static):
         self._retrieval_results: list[RetrievalResult] = []
         self._retrieval_quality: RetrievalQuality | None = None
         self._debug_footer: str = ""
+        self._smart_result: SmartResult | None = None
+        self._smart_expanded: bool = False
         # Initial streaming placeholder
         super().__init__(Text("▍", style=theme.muted))
 
@@ -202,6 +205,22 @@ class AIBubble(Static):
         )
         self._redraw(body)
 
+    def finalize_with_smart(self, full_text: str, result: SmartResult | None) -> None:
+        """Like finalize() but appends an MMAE specialists footer."""
+        self._buffer = full_text
+        self._smart_result = result
+        body: RenderableType = (
+            Markdown(full_text) if full_text.strip() else Text("", style=self._theme.muted)
+        )
+        self._redraw(body)
+
+    def toggle_smart_detail(self) -> None:
+        """Expand or collapse the MMAE specialist detail section."""
+        self._smart_expanded = not self._smart_expanded
+        if self._buffer:
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
+            self._redraw(body)
+
     def finalize_with_mmos(self, full_text: str, mmos: TurnMMOSMetadata | None) -> None:
         """Like finalize() but prepends an MMOS attribution header line."""
         if mmos is not None:
@@ -215,6 +234,53 @@ class AIBubble(Static):
             self._redraw(Group(header, body))
         else:
             self.finalize(full_text)
+
+    def _render_smart_footer(self, result: SmartResult, t: Theme) -> Text:
+        """Render the ✦ N specialists footer (collapsed or expanded)."""
+        n = len(result.store.all())
+        label = f"specialist{'s' if n != 1 else ''}"
+        footer = Text()
+
+        if not self._smart_expanded:
+            footer.append(
+                f"\n✦ {n} {label} · combined by {result.combiner_model}  ",
+                style=t.muted,
+            )
+            footer.append("[expand]", style=t.accent)
+        else:
+            footer.append(
+                f"\n✦ {n} {label} · combined by {result.combiner_model}  ",
+                style=t.muted,
+            )
+            footer.append("[collapse]", style=t.accent)
+            footer.append(
+                f"\n  Router: {result.routing_plan.complexity}  "
+                f"categories={', '.join(result.routing_plan.categories_detected)}",
+                style=t.muted,
+            )
+            for entry in result.store.all():
+                conf = "  ⚠ low confidence" if entry.low_confidence else ""
+                footer.append(
+                    f"\n  [{entry.slot}] {entry.category} · {entry.model_alias}"
+                    f"  score={entry.quality_score}%  {entry.duration_s:.1f}s"
+                    f"  retries={entry.retry_count}{conf}",
+                    style=t.muted,
+                )
+                footer.append(f"\n    Q: {entry.sub_question[:80]}", style=t.muted)
+            footer.append(
+                f"\n  Combiner: {result.combiner_model} · {result.combiner_mode}",
+                style=t.muted,
+            )
+            if result.formatter_applied:
+                footer.append(f"\n  Formatter: {result.formatter_applied}", style=t.muted)
+            else:
+                footer.append("\n  Formatter: not used", style=t.muted)
+            footer.append(
+                f"\n  Total: {result.total_duration_s:.2f}s",
+                style=t.muted,
+            )
+
+        return footer
 
     def _render_attribution_header(self, mmos: TurnMMOSMetadata) -> Text:
         """Produce  ── model · strategy · tokens · elapsed ──  line."""
@@ -335,6 +401,9 @@ class AIBubble(Static):
                 extra_parts.append(Text(f"\n{icon} Retrieved from {n} source{s}", style=t.muted))
         if self._debug_footer:
             extra_parts.append(Text(f"\n{self._debug_footer}", style=t.muted))
+
+        if self._smart_result is not None and (cfg is None or getattr(cfg, "smart_show_detail", True)):
+            extra_parts.append(self._render_smart_footer(self._smart_result, t))
 
         if extra_parts:
             content: RenderableType = Group(body, *extra_parts)

@@ -8,7 +8,11 @@ import pytest
 
 from anythink.exceptions import SearchError
 from anythink.search.base import SearchResult
-from anythink.search.duckduckgo import DuckDuckGoSearch
+from anythink.search.duckduckgo import (
+    DuckDuckGoSearch,
+    _date_to_timelimit,
+    _domain_from_url,
+)
 
 
 def _make_ddgs_module(raw_results: list[dict]) -> MagicMock:
@@ -121,3 +125,39 @@ class TestDuckDuckGoSearch:
         assert results[0].title == ""
         assert results[0].url == ""
         assert results[0].snippet == ""
+
+
+class TestDuckDuckGoHelpers:
+    def test_date_to_timelimit_none(self) -> None:
+        assert _date_to_timelimit(None) is None
+
+    def test_date_to_timelimit_known(self) -> None:
+        assert _date_to_timelimit("24h") == "d"
+        assert _date_to_timelimit("7d") == "w"
+        assert _date_to_timelimit("30d") == "m"
+        assert _date_to_timelimit("3m") == "m"
+
+    def test_date_to_timelimit_unknown_defaults_to_week(self) -> None:
+        assert _date_to_timelimit("2025-01-01") == "w"
+
+    def test_domain_from_url_strips_www(self) -> None:
+        assert _domain_from_url("https://www.python.org/") == "python.org"
+
+    def test_domain_from_url_no_www(self) -> None:
+        assert _domain_from_url("https://docs.python.org") == "docs.python.org"
+
+    def test_domain_from_url_empty(self) -> None:
+        assert _domain_from_url("") is None
+
+    async def test_sync_search_with_timelimit(self) -> None:
+        import sys
+
+        raw = [{"title": "T", "href": "https://example.com", "body": "S"}]
+        mock_module = _make_ddgs_module(raw)
+        with patch.dict(sys.modules, {"duckduckgo_search": mock_module}):
+            ddg = DuckDuckGoSearch()
+            results = ddg._sync_search("python", 3, timelimit="w")
+        assert len(results) == 1
+        # Verify timelimit was passed to ddgs.text
+        call_kwargs = mock_module.DDGS.return_value.text.call_args[1]
+        assert call_kwargs.get("timelimit") == "w"

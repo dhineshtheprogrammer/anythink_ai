@@ -126,6 +126,11 @@ class TestSessionsServer:
         result = await srv.call_tool("get_session", {})
         assert result.is_error
 
+    async def test_unknown_tool_returns_error(self) -> None:
+        srv = self._make_server()
+        result = await srv.call_tool("nonexistent_tool", {})
+        assert result.is_error
+
 
 # ── RAG ───────────────────────────────────────────────────────────────────────
 
@@ -247,3 +252,17 @@ class TestSearchServer:
         srv = self._make_server()
         result = await srv.call_tool("bad_tool", {})
         assert result.is_error
+
+
+class TestRAGServerError:
+    async def test_retrieve_exception_returns_error_result(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_rag = MagicMock()
+        mock_rag.retrieve = AsyncMock(side_effect=RuntimeError("index corrupt"))
+        mock_emb = MagicMock()
+
+        srv = RAGServer(mock_rag, mock_emb)
+        result = await srv.call_tool("rag_search", {"query": "test"})
+        assert result.is_error
+        assert "Retrieval failed" in result.content

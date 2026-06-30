@@ -297,3 +297,19 @@ class TestBranchCommand:
         BranchManager(state).switch_to("main")
         result = await registry.dispatch("/branch switch Branch 1", ctx, state)  # type: ignore[union-attr]
         assert result.action == "branch_switch:Branch 1"
+
+
+class TestBranchManagerBranchNames:
+    def test_branch_names_returns_list(self) -> None:
+        state = _make_state()
+        bm = BranchManager(state)
+        names = bm.branch_names()
+        assert isinstance(names, list)
+        assert "main" in names
+
+    def test_branch_names_after_create(self) -> None:
+        state = _make_state()
+        bm = BranchManager(state)
+        bm.create_branch()
+        names = bm.branch_names()
+        assert len(names) == 2

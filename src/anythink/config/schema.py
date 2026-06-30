@@ -60,7 +60,24 @@ class AppConfig:
     rag_chunk_overlap: int = 100  # overlap tokens (session-level default)
     rag_quality_indicators: bool = True  # show confidence scores in response footer
     rag_confidence_display: bool = True  # show per-chunk relevance in expanded view
-    rag_no_match_behavior: str = "graceful"  # "graceful" (3-option menu) | "passthrough" (ignore RAG)
+    rag_no_match_behavior: str = (
+        "graceful"  # "graceful" (3-option menu) | "passthrough" (ignore RAG)
+    )
+
+    # --- Enhanced Web Search fields ---
+    search_default_enabled: bool = False  # global default; per-session toggle lives in ChatState
+    search_mode: str = "general"  # "general" | "news"
+    search_max_per_response: int = 5
+    search_query_rewrite: bool = True
+    search_preview: bool = True
+    search_preview_delay_s: float = 3.0
+    search_cache_enabled: bool = True
+    search_cache_ttl_minutes: int = 30
+    search_safe_search: str = "moderate"  # "strict" | "moderate" | "off"
+    search_freshness: str | None = None  # "24h"|"7d"|"30d"|"3m"|"YYYY-MM-DD" or None
+    search_include_domains: tuple[str, ...] = field(default_factory=tuple)
+    search_exclude_domains: tuple[str, ...] = field(default_factory=tuple)
+    search_max_page_chars: int = 15_000
 
     # --- V4 MMOS fields (mmos_enabled=False preserves pure V3 behaviour) ---
     mmos_enabled: bool = False
@@ -74,8 +91,8 @@ class AppConfig:
     mmos_orchestration: str = "auto"  # "deterministic" | "meta_llm" | "auto"
     mmos_fallback_order: tuple[str, ...] = field(default_factory=tuple)
 
-    # --- Windows MCP fields (windows_enabled=False is a no-op on all platforms) ---
-    windows_enabled: bool = False
+    # --- Windows MCP fields (auto-enabled on Windows, no-op on other platforms) ---
+    windows_enabled: bool = field(default_factory=lambda: __import__("sys").platform == "win32")
     windows_gui_mode: bool = False
     # Empty tuples → WindowsPathGuard populates OS-appropriate defaults at init
     windows_allowed_paths: tuple[str, ...] = field(default_factory=tuple)
@@ -91,6 +108,23 @@ class AppConfig:
     windows_screenshot_max_px: int = 1920
     windows_notification_app_name: str = "Anythink"
     windows_apps_cache_ttl_minutes: int = 60
+
+    # --- MMWE (Multi-Model Workflow Engine) ---
+    workflow_planner_model: str = ""  # model alias for planner; "" = auto-select
+    workflow_log_dir: str = ""  # override log dir; "" = XDG default
+    workflow_autonomy_mode: str = "confirm"  # "confirm" | "auto"
+
+    # --- MMAE (Multi-Model Answering Engine) ---
+    smart_default_state: bool = False  # off by default at session start
+    smart_combiner_mode: str = "stitch"  # "stitch" | "merge"
+    smart_quality_threshold: int = 50  # 0–100; responses below this score are retried
+    smart_max_splits: int = 5  # maximum sub-questions per turn
+    smart_session_format: str = ""  # "" = no default format; e.g. "markdown", "table"
+    smart_show_detail: bool = True  # show ✦ N specialists footer below responses
+    smart_router_model: str = ""  # model alias; "" = use default_model_alias
+    smart_combiner_model: str = ""  # model alias for combiner; "" = use default_model_alias
+    smart_formatter_model: str = ""  # model alias for formatter; "" = use combiner alias
+    smart_registry_file: str = ""  # path to smart_registry.yaml; "" = XDG default
 
     VALID_THEMES: frozenset[str] = field(
         default=frozenset(

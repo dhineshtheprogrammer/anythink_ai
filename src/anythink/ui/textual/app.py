@@ -14,7 +14,9 @@ from anythink import __version__
 from anythink.app.chat import (
     ChatState,
     _build_session,
-    _format_search_results,
+    _freshness_to_date,
+    _history_context,
+    _inject_search_context,
     _trim_history,
 )
 from anythink.bookmarks.manager import BookmarkManager
@@ -49,6 +51,7 @@ from anythink.ui.textual.panels.ratelimit_panel import RateLimitPanel
 from anythink.ui.textual.panels.session_list import SessionListPanel
 from anythink.ui.textual.panels.stats import StatsPanel
 from anythink.ui.textual.panels.tool_output import ToolOutputTab
+from anythink.ui.textual.panels.workflow_panel import WorkflowPanel
 from anythink.ui.textual.rag_settings import RAGSettingsMenu
 from anythink.ui.textual.rag_wizard import RAGIndexWizard
 from anythink.ui.textual.settings_menu import SettingsMenu
@@ -117,6 +120,10 @@ class AnythinkApp(App[int]):
     }
     DebugPanel {
         width: 32;
+        display: none;
+    }
+    WorkflowPanel {
+        width: 36;
         display: none;
     }
     #bottom-tabs {
@@ -194,9 +201,15 @@ class AnythinkApp(App[int]):
         # Update confirm: set by /update when a newer version is available
         self._pending_update: bool = False
 
-        # ── V4 MMOS state ──────────────────────────────────────────────────
+        # ── MMWE state ─────────────────────────────────────────────────────
         import asyncio as _asyncio
 
+        self._pending_workflow_approval: dict | None = None
+        self._workflow_state: Any = None  # WorkflowState | None
+        self._workflow_approval_event: _asyncio.Event = _asyncio.Event()
+        self._workflow_approval_result: str = "aborted"
+
+        # ── V4 MMOS state ──────────────────────────────────────────────────
         self._microprompt_event: _asyncio.Event = _asyncio.Event()
         self._microprompt_result: Any = None  # QueryIntent | None
         self._plan_approval_event: _asyncio.Event = _asyncio.Event()
@@ -215,6 +228,7 @@ class AnythinkApp(App[int]):
             yield ConversationView()
             yield StatsPanel(self._ctx, id="right-panel")
             yield DebugPanel(id="debug-panel")
+            yield WorkflowPanel(id="workflow-panel")
         with TabbedContent(id="bottom-tabs"):
             with TabPane("Files", id="tab-files"):
                 yield FileBrowserTab(id="file-browser")
@@ -388,6 +402,11 @@ class AnythinkApp(App[int]):
             await self._handle_update_confirmation(text)
             return
 
+        # ── workflow approval gate ────────────────────────────────────────
+        if self._pending_workflow_approval is not None:
+            await self._handle_workflow_approval(text)
+            return
+
         # ── optimize reset confirmation ────────────────────────────────────
         if self._pending_optimize_reset:
             self._pending_optimize_reset = False
@@ -435,6 +454,16 @@ class AnythinkApp(App[int]):
             )
             self.run_worker(
                 self._run_comparison(state, text, aliases),
+                exclusive=False,
+                exit_on_error=False,
+            )
+            return
+
+        # ── MMAE smart pipeline (priority 19.5) ───────────────────────────
+        if self._ctx.smart_enabled:
+            conv.add_bubble(UserBubble(text, t, config=self._ctx.config))
+            self.run_worker(
+                self._run_smart_response(state, text),
                 exclusive=False,
                 exit_on_error=False,
             )
@@ -636,9 +665,7 @@ class AnythinkApp(App[int]):
             self._rag_wizard = None
             with contextlib.suppress(Exception):
                 conv = self.query_one(ConversationView)
-                conv.add_bubble(
-                    SystemBubble("Wizard cancelled.", self._ctx.theme, kind="info")
-                )
+                conv.add_bubble(SystemBubble("Wizard cancelled.", self._ctx.theme, kind="info"))
             return
 
         # Settings overlay takes highest priority
@@ -737,8 +764,8 @@ class AnythinkApp(App[int]):
 
     def on_settings_menu_changed(self, event: SettingsMenu.Changed) -> None:
         """Sync runtime state immediately when a config value is saved from settings."""
-        if event.field == "web_search_enabled" and self._state is not None:
-            self._state.search_enabled = self._ctx.config.web_search_enabled
+        if event.field == "search_default_enabled" and self._state is not None:
+            self._state.search_enabled = self._ctx.config.search_default_enabled
 
         if event.field == "active_theme":
             from anythink.ui.theme import get_theme
@@ -805,7 +832,7 @@ class AnythinkApp(App[int]):
         self.query_one(Input).focus()
         if self._state is not None:
             # Final sync: ensure runtime state matches whatever was saved
-            self._state.search_enabled = self._ctx.config.web_search_enabled
+            self._state.search_enabled = self._ctx.config.search_default_enabled
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
     # ── V2.2 visual helpers ────────────────────────────────────────────────────
@@ -1385,6 +1412,9 @@ class AnythinkApp(App[int]):
         if result.action == "rag_hud_update" and self._state is not None:
             self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
 
+        if result.action == "search_hud_update" and self._state is not None:
+            self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
+
         if result.action == "rag_settings_open":
             try:
                 rsm = self.query_one(RAGSettingsMenu)
@@ -1581,6 +1611,13 @@ class AnythinkApp(App[int]):
                 conv.add_bubble(SystemBubble(result.message, t, kind="info"))
             return
 
+        if result.action == "smart_hud_update":
+            hud = self.query_one(HUDWidget)
+            hud.smart_enabled = self._ctx.smart_enabled
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            return
+
         if result.action == "optimize_reset_confirm":
             self._pending_optimize_reset = True
             if result.message:
@@ -1608,6 +1645,128 @@ class AnythinkApp(App[int]):
                     kind="info",
                 )
             )
+            return
+
+        # ── MMWE workflow action signals ───────────────────────────────────
+        if result.action in ("workflow_run_request", "workflow_dry_run_request"):
+            extra = result.extra or {}
+            dry_run = result.action == "workflow_dry_run_request"
+            self.run_worker(
+                self._run_workflow(
+                    task=str(extra.get("task", "")),
+                    name=str(extra.get("name", "")),
+                    is_named=bool(extra.get("is_named", False)),
+                    dry_run=dry_run,
+                ),
+                exclusive=False,
+                exit_on_error=False,
+            )
+            return
+
+        if result.action == "workflow_stop":
+            ws = self._workflow_state
+            if ws is not None:
+                ws.stop_requested = True
+                conv.add_bubble(SystemBubble("Workflow stop requested.", t, kind="warning"))
+            else:
+                conv.add_bubble(SystemBubble("No workflow is currently running.", t, kind="info"))
+            return
+
+        if result.action == "workflow_pause":
+            ws = self._workflow_state
+            if ws is not None:
+                ws.paused = True
+                conv.add_bubble(SystemBubble("Workflow paused.", t, kind="info"))
+            else:
+                conv.add_bubble(SystemBubble("No workflow is currently running.", t, kind="info"))
+            return
+
+        if result.action == "workflow_resume":
+            ws = self._workflow_state
+            if ws is not None:
+                ws.paused = False
+                conv.add_bubble(SystemBubble("Workflow resumed.", t, kind="info"))
+            else:
+                conv.add_bubble(SystemBubble("No workflow is currently paused.", t, kind="info"))
+            return
+
+        if result.action == "workflow_status_request":
+            ws = self._workflow_state
+            if ws is None:
+                conv.add_bubble(SystemBubble("No workflow is currently running.", t, kind="info"))
+            else:
+                from anythink.workflow.models import WorkflowState as _WS
+
+                if isinstance(ws, _WS):
+                    status_msg = (
+                        f"Workflow: {ws.plan.name}\n"
+                        f"Status  : {ws.status.value}\n"
+                        f"Stage   : {ws.current_stage_id or '(none)'}\n"
+                        f"Done    : {len(ws.completed_stages)} stage(s)"
+                    )
+                    conv.add_bubble(SystemBubble(status_msg, t, kind="info"))
+            return
+
+        if result.action == "workflow_new_wizard":
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            else:
+                conv.add_bubble(
+                    SystemBubble(
+                        'Use /workflow run "<task>" to plan and save a new workflow.',
+                        t,
+                        kind="info",
+                    )
+                )
+            return
+
+        if result.action == "workflow_edit_request":
+            import contextlib
+            import subprocess  # nosec B404
+            import sys
+
+            name = (result.extra or {}).get("name", "")
+            path = self._ctx.workflow_storage._dir / f"{name}.yaml"
+            with contextlib.suppress(Exception):
+                if sys.platform == "win32":
+                    subprocess.Popen(["notepad.exe", str(path)])  # nosec B603, B607
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", str(path)])  # nosec B603, B607
+                else:
+                    subprocess.Popen(["xdg-open", str(path)])  # nosec B603, B607
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            else:
+                conv.add_bubble(
+                    SystemBubble(f"Workflow '{name}' opened in editor.", t, kind="success")
+                )
+            return
+
+        if result.action == "workflow_panel_toggle":
+            import contextlib
+
+            with contextlib.suppress(Exception):
+                wp = self.query_one("#workflow-panel")
+                wp.display = not wp.display
+            return
+
+        if result.action == "open_file_in_editor":
+            import contextlib
+            import subprocess  # nosec B404
+            import sys
+
+            file_path = str((result.extra or {}).get("path", ""))
+            with contextlib.suppress(Exception):
+                if sys.platform == "win32":
+                    subprocess.Popen(["notepad.exe", file_path])  # nosec B603, B607
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", file_path])  # nosec B603, B607
+                else:
+                    subprocess.Popen(["xdg-open", file_path])  # nosec B603, B607
+            if result.message:
+                conv.add_bubble(SystemBubble(result.message, t, kind="info"))
+            else:
+                conv.add_bubble(SystemBubble(f"Opened: {file_path}", t, kind="success"))
             return
 
         if result.should_exit:
@@ -1801,9 +1960,7 @@ class AnythinkApp(App[int]):
                                 _debug_record.t_rag_end = time.monotonic()
                                 _debug_record.rag_results = list(rag_results)
                                 if _debug_panel is not None:
-                                    n = sum(
-                                        1 for r in rag_results if r.relevance >= _rag_threshold
-                                    )
+                                    n = sum(1 for r in rag_results if r.relevance >= _rag_threshold)
                                     await _debug_panel.append_event(
                                         f"RAG retrieved {n} chunks above threshold",
                                         f"{_debug_record.rag_duration_ms():.0f}ms",
@@ -1851,7 +2008,7 @@ class AnythinkApp(App[int]):
                                         f"  [3]  Rephrase your query"
                                     )
                                     _conv.add_bubble(
-                                        SystemBubble(_menu, t, kind="warning")
+                                        SystemBubble(_menu, self._ctx.theme, kind="warning")
                                     )
                                     self._active_ai_bubble = None
                                     import contextlib as _cl2
@@ -1901,47 +2058,61 @@ class AnythinkApp(App[int]):
                             _debug_record.t_rag_end = time.monotonic()
 
             # ── Web search ─────────────────────────────────────────────────
+            if state.search_enabled and self._ctx.config.search_cache_enabled:
+                self._ctx.search_cache.evict_expired()
+
             if state.search_enabled:
                 if thinking is not None:
                     thinking.set_context("Searching the web…")
-                backend = self._ctx.search_registry.get_available(self._ctx.config.search_provider)
-                if backend is not None:
-                    try:
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_search_start = time.monotonic()
-                        results = await backend.search(query)
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_search_end = time.monotonic()
-                            if _debug_panel is not None:
-                                await _debug_panel.append_event(
-                                    "Web search complete",
-                                    f"{_debug_record.search_duration_ms():.0f}ms",
-                                )
-                        if results:
-                            _last_msg = state.history[-1]
-                            _existing = (
-                                _last_msg.content
-                                if isinstance(_last_msg.content, list)
-                                else [TextPart(_last_msg.content)]
+                _conv = self.query_one(ConversationView)
+                _search_progress = SystemBubble(
+                    "Preparing search…", self._ctx.theme, kind="info", config=self._ctx.config
+                )
+                _conv.add_bubble(_search_progress)
+
+                # 1. Rewrite query
+                _raw_queries: list[str] = [query]
+                if self._ctx.config.search_query_rewrite:
+                    from anythink.search.rewriter import QueryRewriter as _QueryRewriter
+
+                    _rewriter = _QueryRewriter(state.provider, state.model_id)
+                    _raw_queries = await _rewriter.rewrite_multi(query, _history_context(state))
+                    _search_progress.set_message(f"Searching: {_raw_queries[0]!r}")
+
+                # 2. Run orchestrator
+                if dm.is_active() and _debug_record is not None:
+                    _debug_record.t_search_start = time.monotonic()
+                try:
+                    _orch_result = await self._ctx.search_orchestrator.run(
+                        _raw_queries,
+                        date_from=_freshness_to_date(self._ctx.config.search_freshness),
+                        safe_search=self._ctx.config.search_safe_search,
+                        include_domains=list(self._ctx.config.search_include_domains),
+                        exclude_domains=list(self._ctx.config.search_exclude_domains),
+                        news_mode=(state.search_mode == "news"),
+                        progress_cb=lambda msg: _search_progress.set_message(msg),
+                    )
+                    if dm.is_active() and _debug_record is not None:
+                        _debug_record.t_search_end = time.monotonic()
+                        if _debug_panel is not None:
+                            await _debug_panel.append_event(
+                                "Web search complete",
+                                f"{_debug_record.search_duration_ms():.0f}ms",
                             )
-                            state.history[-1] = ChatMessage(
-                                role="user",
-                                content=[
-                                    TextPart(_format_search_results(results, query)),
-                                    *_existing,
-                                ],
-                            )
-                    except SearchError as _se:
-                        if dm.is_active() and _debug_record is not None:
-                            _debug_record.t_search_end = time.monotonic()
-                        _sc = self.query_one(ConversationView)
-                        _sc.add_bubble(
-                            SystemBubble(
-                                f"Web search failed: {_se.user_message}",
-                                self._ctx.theme,
-                                kind="warning",
-                            )
+
+                    # 3. Inject into history + update bubble
+                    if _orch_result.results:
+                        _inject_search_context(state, _orch_result.results, query)
+                        _search_progress.set_message(
+                            f"Found {len(_orch_result.results)} results"
+                            f" · {_orch_result.elapsed_s:.1f}s"
                         )
+                    else:
+                        _search_progress.set_message("No search results found.")
+                except SearchError as _se:
+                    if dm.is_active() and _debug_record is not None:
+                        _debug_record.t_search_end = time.monotonic()
+                    _search_progress.set_message(f"Search failed: {_se.user_message}")
 
             # ── Debug: prompt assembled ────────────────────────────────────
             if dm.is_active() and _debug_record is not None:
@@ -2274,7 +2445,7 @@ class AnythinkApp(App[int]):
         elif choice == "2":
             # Show closest matches; transition to override-confirm state
             self._pending_rag_nomatch = None
-            lines = [f"Closest matches (below threshold):"]
+            lines = ["Closest matches (below threshold):"]
             for i, r in enumerate(results[: self._ctx.config.rag_top_k + 2], 1):
                 lines.append(f"  {i}. {r.source_label()}  [{r.relevance:.0%}]")
                 lines.append(f"     {r.excerpt(80)}")
@@ -2295,9 +2466,7 @@ class AnythinkApp(App[int]):
             )
 
         else:
-            conv.add_bubble(
-                SystemBubble("Please enter 1, 2, or 3.", t, kind="info")
-            )
+            conv.add_bubble(SystemBubble("Please enter 1, 2, or 3.", t, kind="info"))
 
     async def _handle_rag_override_confirm(self, text: str) -> None:
         """Handle y/n after the user sees the low-relevance chunk inspector."""
@@ -2319,9 +2488,7 @@ class AnythinkApp(App[int]):
             if self._state and self._state.history and self._state.history[-1].role == "user":
                 self._state.history.pop()
             conv.add_bubble(
-                SystemBubble(
-                    "Cancelled. Rephrase your query and try again.", t, kind="info"
-                )
+                SystemBubble("Cancelled. Rephrase your query and try again.", t, kind="info")
             )
         else:
             conv.add_bubble(SystemBubble("Please enter y or n.", t, kind="info"))
@@ -2366,9 +2533,7 @@ class AnythinkApp(App[int]):
                     if self._state is not None:
                         self.query_one(HUDWidget).update_from_state(self._ctx, self._state)
                 except Exception as exc:
-                    conv.add_bubble(
-                        SystemBubble(f"Failed to create index: {exc}", t, kind="error")
-                    )
+                    conv.add_bubble(SystemBubble(f"Failed to create index: {exc}", t, kind="error"))
 
     async def _launch_retry_stream(
         self,
@@ -2567,7 +2732,7 @@ class AnythinkApp(App[int]):
         result = await self._ctx.mcp_manager.call_tool(tool_name, dict(arguments))
 
         header = f"🔌  {tool_name} [{result.server_name}] ({result.duration_s:.3f}s)"
-        preview = result.content[:600] + ("…" if len(result.content) > 600 else "")
+        preview = result.content[:2000] + ("…" if len(result.content) > 2000 else "")
         kind = "error" if result.is_error else "code"
         conv.add_bubble(SystemBubble(f"{header}\n{preview}", t, kind=kind))
         self._log_tool_event(tool_name, result.server_name or "mcp", result.content[:120])
@@ -2579,12 +2744,10 @@ class AnythinkApp(App[int]):
             success=not result.is_error,
         )
 
-        if result.is_error:
-            return
-
         result_ctx = (
-            f"[MCP Tool: {tool_name} on {result.server_name}, {result.duration_s:.3f}s]\n"
-            f"{result.content}"
+            f"[MCP Tool: {tool_name} on {result.server_name}, {result.duration_s:.3f}s"
+            + (" — ERROR" if result.is_error else "")
+            + f"]\n{result.content}"
         )
         self._undo_checkpoints.append(len(state.history))
         state.history.append(ChatMessage(role="user", content=result_ctx))
@@ -3200,3 +3363,310 @@ class AnythinkApp(App[int]):
 
         # Prune tracking dicts
         self._prune_history_tracking()
+
+    # ── MMAE smart response worker ─────────────────────────────────────────
+
+    async def _run_smart_response(self, state: ChatState, query: str) -> None:
+        """MMAE pipeline worker — routes query to specialists, combines, finalises bubble."""
+        import contextlib
+        import time
+
+        from anythink.providers.base import ChatMessage as _CM
+
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+        cfg = self._ctx.config
+
+        # Record checkpoint + add user message to history
+        self._undo_checkpoints.append(len(state.history))
+        state.history.append(_CM(role="user", content=query))
+
+        # Mount AI bubble + thinking widget
+        bubble = AIBubble(t, model_alias="SMART", provider="", config=cfg)
+        thinking = ThinkingWidget(t)
+
+        def _add_bubbles() -> None:
+            conv.add_bubble(bubble)
+            conv.add_bubble(thinking)
+
+        self.call_from_thread(_add_bubbles)
+
+        # Progress callback → updates ThinkingWidget phrase
+        def _on_progress(msg: str) -> None:
+            def _update() -> None:
+                with contextlib.suppress(Exception):
+                    thinking.set_context(msg)
+
+            self.call_from_thread(_update)
+
+        # Also pipe debug events to the DebugPanel when it's open
+        dm = self._ctx.debug_manager
+
+        def _debug_event(label: str, detail: str = "") -> None:
+            if dm.is_active() and dm.panel_open():
+                try:
+                    panel = self.query_one("#debug-panel")
+                    self.call_from_thread(
+                        lambda: self.run_worker(panel.append_event(label, detail), exclusive=False)
+                    )
+                except Exception:
+                    pass
+
+        t0 = time.monotonic()
+        try:
+            result = await self._ctx.smart_engine.run(
+                message=query,
+                history=state.history[:-1],  # exclude the user message we just appended
+                session_id=state.session_id,
+                combiner_mode=cfg.smart_combiner_mode,
+                session_format=cfg.smart_session_format,
+                on_progress=_on_progress,
+            )
+            final_text = result.combined_text
+        except Exception as exc:
+            final_text = f"[SMART engine error: {exc}]"
+            result = None
+
+        # Append assistant response to history (combined text only — no specialist responses)
+        ai_msg = _CM(role="assistant", content=final_text)
+        state.history.append(ai_msg)
+        self._last_response_text = final_text
+
+        # Finalise bubble
+        def _finish() -> None:
+            with contextlib.suppress(Exception):
+                thinking.remove()
+            with contextlib.suppress(Exception):
+                if result is not None:
+                    bubble.finalize_with_smart(final_text, result)
+                else:
+                    bubble.finalize(final_text)
+
+        self.call_from_thread(_finish)
+
+        # Update HUD
+        hud = self.query_one(HUDWidget)
+        hud.smart_enabled = self._ctx.smart_enabled
+
+        # Autosave
+        if cfg.session_autosave:
+            with contextlib.suppress(Exception):
+                self._ctx.session_manager.save(_build_session(state))
+
+        self._prune_history_tracking()
+
+    # ── MMWE workers and handlers ──────────────────────────────────────────
+
+    async def _run_workflow(
+        self,
+        task: str,
+        name: str,
+        is_named: bool,
+        dry_run: bool,
+    ) -> None:
+        """Background worker: plan and optionally execute an MMWE workflow."""
+
+        from anythink.exceptions import WorkflowError
+
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+        engine = self._ctx.workflow_engine
+
+        # ── Resolve plan ───────────────────────────────────────────────
+        if is_named and name:
+            try:
+                plan = self._ctx.workflow_storage.load(name)
+            except WorkflowError as exc:
+                conv.add_bubble(SystemBubble(exc.user_message, t, kind="error"))
+                return
+        elif task:
+            conv.add_bubble(SystemBubble(f"Planning workflow for: {task!r}…", t, kind="info"))
+            try:
+                from anythink.workflow.models import ClarificationRequest
+
+                raw = await engine.plan_task(task, self._ctx.config.workflow_planner_model)
+                if isinstance(raw, ClarificationRequest):
+                    questions = "\n".join(f"  • {q}" for q in raw.questions)
+                    conv.add_bubble(
+                        SystemBubble(
+                            f"The planner needs clarification:\n{questions}\n\n"
+                            "Refine your task description and run /workflow again.",
+                            t,
+                            kind="warning",
+                        )
+                    )
+                    return
+                plan = raw
+            except Exception as exc:  # noqa: BLE001
+                conv.add_bubble(SystemBubble(f"Planner error: {exc}", t, kind="error"))
+                return
+        else:
+            conv.add_bubble(
+                SystemBubble("No task or name provided for the workflow.", t, kind="error")
+            )
+            return
+
+        # ── Dry run: show plan and exit ─────────────────────────────────
+        if dry_run:
+            summary = await engine.dry_run(plan, self._ctx)
+            conv.add_bubble(SystemBubble(summary, t, kind="info"))
+            return
+
+        # ── Confirm mode: show plan summary and wait for approval ───────
+        if self._ctx.config.workflow_autonomy_mode == "confirm":
+            preview = await engine.dry_run(plan, self._ctx)
+            conv.add_bubble(SystemBubble(preview, t, kind="info"))
+            conv.add_bubble(
+                SystemBubble(
+                    "Run this workflow? Type y to confirm or n to cancel.",
+                    t,
+                    kind="warning",
+                )
+            )
+            self._pending_workflow_approval = {"plan": plan}
+            return
+
+        # ── Auto mode: run immediately ──────────────────────────────────
+        await self._execute_workflow(plan)
+
+    async def _execute_workflow(self, plan: object) -> None:
+        """Execute a resolved WorkflowPlan and report results to the TUI."""
+        import contextlib
+
+        from anythink.workflow.models import Stage, StageResult, WorkflowCallbacks, WorkflowPlan
+
+        assert isinstance(plan, WorkflowPlan)
+
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+
+        # Show and populate the workflow panel
+        with contextlib.suppress(Exception):
+            wp = self.query_one("#workflow-panel", WorkflowPanel)
+            wp.display = True
+            await wp.begin_workflow(plan.name)
+
+        # Update HUD
+        with contextlib.suppress(Exception):
+            self.query_one(HUDWidget).workflow_active = True
+
+        async def on_stage_start(stage: Stage) -> None:
+            with contextlib.suppress(Exception):
+                wp2 = self.query_one("#workflow-panel", WorkflowPanel)
+                await wp2.stage_started(stage.id, stage.label)
+
+        async def on_stage_complete(stage: Stage, result: StageResult) -> None:
+            with contextlib.suppress(Exception):
+                wp2 = self.query_one("#workflow-panel", WorkflowPanel)
+                ok = not result.error
+                summary = result.raw_content or ""
+                await wp2.stage_complete(stage.id, ok, summary)
+
+        async def on_approval_needed(message: str) -> str:
+            with contextlib.suppress(Exception):
+                wp2 = self.query_one("#workflow-panel", WorkflowPanel)
+                await wp2.approval_needed(message)
+            conv.add_bubble(
+                SystemBubble(
+                    f"Approval needed: {message}\nType y to approve, skip, or abort.",
+                    t,
+                    kind="warning",
+                )
+            )
+            self._pending_workflow_approval = {"approval_gate": True}
+            self._workflow_approval_event.clear()
+            await self._workflow_approval_event.wait()
+            return self._workflow_approval_result
+
+        async def on_loop_progress(current: int, total: int, result: StageResult) -> None:
+            with contextlib.suppress(Exception):
+                wp2 = self.query_one("#workflow-panel", WorkflowPanel)
+                await wp2.loop_progress(current, total)
+
+        async def on_model_unavailable(stage: Stage, tried: list[str]) -> str:
+            tried_str = ", ".join(tried)
+            conv.add_bubble(
+                SystemBubble(
+                    f"All fallbacks exhausted for stage '{stage.id}' (tried: {tried_str}).\n"
+                    "Aborting workflow.",
+                    t,
+                    kind="error",
+                )
+            )
+            return ""
+
+        callbacks = WorkflowCallbacks(
+            on_stage_start=on_stage_start,
+            on_stage_complete=on_stage_complete,
+            on_approval_needed=on_approval_needed,
+            on_loop_progress=on_loop_progress,
+            on_model_unavailable=on_model_unavailable,
+        )
+
+        log = await self._ctx.workflow_engine.run(plan, self._ctx, callbacks)
+
+        # Clear workflow state reference
+        self._workflow_state = None
+
+        # Update panel and HUD
+        status = log.status.value if log.status else "completed"
+        final_out = log.final_output or ""
+        with contextlib.suppress(Exception):
+            wp3 = self.query_one("#workflow-panel", WorkflowPanel)
+            await wp3.workflow_done(status, final_out)
+        with contextlib.suppress(Exception):
+            self.query_one(HUDWidget).workflow_active = False
+
+        kind = "success" if status == "completed" else "error"
+        conv.add_bubble(
+            SystemBubble(
+                f"Workflow '{plan.name}' {status}.\n{final_out[:200]}",
+                t,
+                kind=kind,
+            )
+        )
+
+        # Autosave the plan on first successful run
+        if status == "completed":
+            with contextlib.suppress(Exception):
+                self._ctx.workflow_storage.save(plan.name, plan)
+
+        self._ctx.notifier.notify(
+            "workflow_done",
+            "Anythink — Workflow",
+            f"'{plan.name}' {status}.",
+        )
+
+    async def _handle_workflow_approval(self, text: str) -> None:
+        """Handle the user's y/n response to a workflow approval gate."""
+        import contextlib
+
+        data = self._pending_workflow_approval
+        self._pending_workflow_approval = None
+        t = self._ctx.theme
+        conv = self.query_one(ConversationView)
+        normalized = text.strip().lower()
+
+        # Plan-level approval (confirm mode)
+        if data is not None and "plan" in data:
+            if normalized in ("y", "yes"):
+                plan = data["plan"]
+                self.run_worker(
+                    self._execute_workflow(plan),
+                    exclusive=False,
+                    exit_on_error=False,
+                )
+            else:
+                conv.add_bubble(SystemBubble("Workflow cancelled.", t, kind="info"))
+            return
+
+        # Stage-level approval gate (on_approval_needed callback)
+        if normalized in ("y", "yes", "approve", "approved"):
+            self._workflow_approval_result = "approved"
+        elif normalized in ("skip",):
+            self._workflow_approval_result = "skipped"
+        else:
+            self._workflow_approval_result = "aborted"
+
+        with contextlib.suppress(Exception):
+            self._workflow_approval_event.set()

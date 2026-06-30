@@ -124,6 +124,20 @@ class TestOllamaProvider:
         assert OllamaProvider().supports_vision is False
 
     @pytest.mark.asyncio
+    async def test_stream_chat_with_top_p(self, httpx_mock: HTTPXMock) -> None:
+        from anythink.providers.base import GenerationParams
+
+        httpx_mock.add_response(
+            method="POST",
+            url="http://localhost:11434/api/chat",
+            content=_ndjson({"message": {"content": "Hi"}, "done": True}),
+        )
+        p = OllamaProvider()
+        gp = GenerationParams(top_p=0.9)
+        chunks = [c async for c in p.stream_chat(make_messages("Hello"), "llama3", gen_params=gp)]
+        assert len(chunks) >= 1
+
+    @pytest.mark.asyncio
     async def test_stream_chat_with_max_tokens(self, httpx_mock: HTTPXMock) -> None:
         httpx_mock.add_response(
             method="POST",

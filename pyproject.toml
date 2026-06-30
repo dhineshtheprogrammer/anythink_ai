@@ -43,6 +43,10 @@ anthropic = ["anthropic>=0.28"]
 mistral = ["mistralai>=1.0"]
 cohere = ["cohere>=5.0"]
 search = ["duckduckgo-search>=6.0"]
+exa = ["exa-py>=1.0"]
+newsapi = ["httpx>=0.27"]
+bing = ["httpx>=0.27"]
+google-cse = ["httpx>=0.27"]
 # --- V2 capability extras (heavy deps, lazy-imported) ---
 rag = [
     "sentence-transformers>=2.7",
@@ -132,6 +136,10 @@ lm_studio = "anythink.providers.lm_studio:LMStudioProvider"
 [project.entry-points."anythink.search_backends"]
 duckduckgo = "anythink.search.duckduckgo:DuckDuckGoSearch"
 serpapi = "anythink.search.serpapi:SerpAPISearch"
+bing = "anythink.search.bing:BingSearch"
+newsapi = "anythink.search.newsapi:NewsAPISearch"
+exa = "anythink.search.exa:ExaSearch"
+google_cse = "anythink.search.google_cse:GoogleCSESearch"
 
 [project.entry-points."anythink.slash_commands"]
 builtin = "anythink.commands.handlers:register_commands"

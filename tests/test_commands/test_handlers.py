@@ -71,6 +71,21 @@ class TestHelpCommand:
         result = await registry.dispatch("/help", ctx, state)
         assert result.error is False
 
+    async def test_help_debug_arg_shows_debug_commands(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/help debug", ctx, state)
+        assert result.message is not None
+        assert "/debug" in result.message
+
+    async def test_help_when_debug_active_shows_hint(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        ctx.debug_manager._active = True  # activate debug mode directly
+        result = await registry.dispatch("/help", ctx, state)
+        assert "debug" in (result.message or "").lower()
+        ctx.debug_manager._active = False  # reset
+
 
 class TestClearCommand:
     async def test_clear_returns_confirm_action(
@@ -170,6 +185,99 @@ class TestModelCommand:
         result = await registry.dispatch("/model", ctx, state)
         assert "mock" in (result.message or "")
         assert "llama3" in (result.message or "")
+
+    async def test_model_lists_aliases_when_available(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.config.models import ModelAlias
+
+        alias = ModelAlias(alias="my-model", provider="mock", model_id="llama3", context_window=4096)
+        ctx.model_registry.add(alias)
+        result = await registry.dispatch("/model", ctx, state)
+        assert "my-model" in (result.message or "")
+
+    async def test_model_switch_unknown_alias_returns_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/model nonexistent-alias", ctx, state)
+        assert result.error is True
+        assert "not found" in (result.message or "").lower()
+
+    async def test_model_switch_success(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from anythink.config.models import ModelAlias
+
+        alias = ModelAlias(
+            alias="new-model",
+            provider="mock",
+            model_id="claude-3",
+            context_window=8192,
+        )
+        ctx.model_registry.add(alias)
+        mock_provider = MagicMock()
+        mock_provider.requires_api_key = False
+        with (
+            patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
+            result = await registry.dispatch("/model new-model", ctx, state)
+        assert result.error is not True
+        assert "new-model" in (result.message or "")
+        assert state.model_id == "claude-3"
+
+    async def test_model_switch_provider_load_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from unittest.mock import patch
+
+        from anythink.config.models import ModelAlias
+        from anythink.exceptions import ProviderUnavailableError
+
+        alias = ModelAlias(
+            alias="bad-model",
+            provider="badprovider",
+            model_id="x",
+            context_window=4096,
+        )
+        ctx.model_registry.add(alias)
+        with (
+            patch.object(
+                ctx.provider_registry,
+                "instantiate",
+                side_effect=ProviderUnavailableError("SDK missing", provider="badprovider"),
+            ),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
+            result = await registry.dispatch("/model bad-model", ctx, state)
+        assert result.error is True
+        assert "Failed to load" in (result.message or "")
+
+    async def test_model_switch_requires_key_but_none(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from anythink.config.models import ModelAlias
+
+        alias = ModelAlias(
+            alias="key-model",
+            provider="groq",
+            model_id="llama3",
+            context_window=8192,
+        )
+        ctx.model_registry.add(alias)
+        mock_provider = MagicMock()
+        mock_provider.requires_api_key = True
+        with (
+            patch.object(ctx.provider_registry, "instantiate", return_value=mock_provider),
+            patch.object(ctx.key_manager, "get_key", return_value=None),
+        ):
+            result = await registry.dispatch("/model key-model", ctx, state)
+        assert result.error is True
+        assert "No API key" in (result.message or "")
 
 
 class TestPersonaCommand:
@@ -524,7 +632,7 @@ class TestSearchCommand:
         result = await registry.dispatch("/search on", ctx, state)
         assert state.search_enabled is True
         assert result.error is False
-        assert "enabled" in (result.message or "").lower()
+        assert "on" in (result.message or "").lower()
 
     async def test_off_disables_search(
         self, registry: CommandRegistry, ctx: AppContext, state: ChatState
@@ -533,7 +641,7 @@ class TestSearchCommand:
         result = await registry.dispatch("/search off", ctx, state)
         assert state.search_enabled is False
         assert result.error is False
-        assert "disabled" in (result.message or "").lower()
+        assert "off" in (result.message or "").lower()
 
     async def test_no_args_returns_usage_error(
         self, registry: CommandRegistry, ctx: AppContext, state: ChatState
@@ -581,6 +689,225 @@ class TestSearchCommand:
         result = await registry.dispatch("/search python", ctx, state)
         assert result.error is True
         assert "search failed" in (result.message or "").lower()
+
+    async def test_news_mode(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search news", ctx, state)
+        assert result.error is False
+        assert state.search_enabled is True
+        assert state.search_mode == "news"
+        assert result.action == "search_hud_update"
+
+    async def test_toggle(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        assert state.search_enabled is False
+        result = await registry.dispatch("/search toggle", ctx, state)
+        assert state.search_enabled is True
+        assert result.action == "search_hud_update"
+        await registry.dispatch("/search toggle", ctx, state)
+        assert state.search_enabled is False
+
+    async def test_status(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search status", ctx, state)
+        assert result.error is False
+        assert "Search:" in (result.message or "")
+
+    async def test_fresh_set(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search fresh 7d", ctx, state)
+        assert result.error is False
+        assert ctx.config.search_freshness == "7d"
+
+    async def test_fresh_off(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from dataclasses import replace
+
+        ctx.config = replace(ctx.config, search_freshness="7d")
+        result = await registry.dispatch("/search fresh off", ctx, state)
+        assert result.error is False
+        assert ctx.config.search_freshness is None
+
+    async def test_fresh_custom(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search fresh custom 2025-01-01 2025-12-31", ctx, state)
+        assert result.error is False
+        assert "2025-01-01" in (ctx.config.search_freshness or "")
+
+    async def test_fresh_invalid(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search fresh invalid", ctx, state)
+        assert result.error is True
+
+    async def test_include_domains(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search include docs.python.org", ctx, state)
+        assert result.error is False
+        assert "docs.python.org" in ctx.config.search_include_domains
+
+    async def test_include_add_domain(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from dataclasses import replace
+
+        ctx.config = replace(ctx.config, search_include_domains=("a.com",))
+        result = await registry.dispatch("/search include add b.com", ctx, state)
+        assert result.error is False
+        assert "a.com" in ctx.config.search_include_domains
+        assert "b.com" in ctx.config.search_include_domains
+
+    async def test_include_no_args_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search include", ctx, state)
+        assert result.error is True
+
+    async def test_exclude_domains(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search exclude w3schools.com", ctx, state)
+        assert result.error is False
+        assert "w3schools.com" in ctx.config.search_exclude_domains
+
+    async def test_exclude_add_domain(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from dataclasses import replace
+
+        ctx.config = replace(ctx.config, search_exclude_domains=("bad.com",))
+        result = await registry.dispatch("/search exclude add worse.com", ctx, state)
+        assert result.error is False
+        assert "worse.com" in ctx.config.search_exclude_domains
+
+    async def test_exclude_no_args_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search exclude", ctx, state)
+        assert result.error is True
+
+    async def test_filters_status(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search filters", ctx, state)
+        assert result.error is False
+        assert "Include:" in (result.message or "")
+
+    async def test_filters_clear(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from dataclasses import replace
+
+        ctx.config = replace(ctx.config, search_include_domains=("a.com",))
+        result = await registry.dispatch("/search filters clear", ctx, state)
+        assert result.error is False
+        assert len(ctx.config.search_include_domains) == 0
+
+    async def test_cache_on(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search cache on", ctx, state)
+        assert result.error is False
+        assert ctx.config.search_cache_enabled is True
+
+    async def test_cache_off(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search cache off", ctx, state)
+        assert result.error is False
+        assert ctx.config.search_cache_enabled is False
+
+    async def test_cache_clear(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.search.base import SearchResult
+        from anythink.search.cache import SearchCache
+
+        ctx.search_cache = SearchCache()
+        ctx.search_cache.put("test", "ddg", [SearchResult(title="T", url="u", snippet="s")])
+        result = await registry.dispatch("/search cache clear", ctx, state)
+        assert result.error is False
+        assert ctx.search_cache.status()["entries"] == 0
+
+    async def test_cache_status(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        from anythink.search.cache import SearchCache
+
+        ctx.search_cache = SearchCache()
+        result = await registry.dispatch("/search cache status", ctx, state)
+        assert result.error is False
+
+    async def test_cache_invalid_subcommand(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search cache invalid", ctx, state)
+        assert result.error is True
+
+    async def test_backends_list(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search backends", ctx, state)
+        assert result.error is False
+        assert "backends" in (result.message or "").lower()
+
+    async def test_backend_use(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search backend use bing", ctx, state)
+        assert result.error is False
+        assert ctx.config.search_provider == "bing"
+
+    async def test_backend_test_no_backend(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search backend test nonexistent", ctx, state)
+        assert result.error is True
+
+    async def test_backend_invalid_subcommand(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search backend invalid name", ctx, state)
+        assert result.error is True
+
+    async def test_settings_opens_overlay(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search settings", ctx, state)
+        assert result.action == "open_search_settings"
+
+    async def test_url_fetch(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search url https://python.org", ctx, state)
+        assert result.action == "browse_request"
+        assert result.extra.get("url") == "https://python.org"
+
+    async def test_url_no_arg_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search url", ctx, state)
+        assert result.error is True
+
+    async def test_raw_query(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search raw python asyncio", ctx, state)
+        assert result.action == "browse_request"
+        assert result.extra.get("skip_rewrite") is True
+
+    async def test_raw_no_arg_error(
+        self, registry: CommandRegistry, ctx: AppContext, state: ChatState
+    ) -> None:
+        result = await registry.dispatch("/search raw", ctx, state)
+        assert result.error is True
 
 
 class TestPluginsCommand:

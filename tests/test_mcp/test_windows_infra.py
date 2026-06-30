@@ -235,3 +235,20 @@ class TestWindowsSafetyChecker:
         for srv, tools in all_tiers.items():
             for tool, tier in tools.items():
                 assert 1 <= tier <= 4, f"{srv}.{tool} has invalid tier {tier}"
+
+    def test_copy_file_dynamic_tier_new_destination(self, tmp_path) -> None:
+        c = self._checker()
+        new_dest = str(tmp_path / "new_copy.txt")
+        assert c.get_tier("windows-filesystem", "copy_file", destination=new_dest) == 2
+
+    def test_copy_file_dynamic_tier_existing_destination(self, tmp_path) -> None:
+        c = self._checker()
+        existing = tmp_path / "existing.txt"
+        existing.write_text("x")
+        assert c.get_tier("windows-filesystem", "copy_file", destination=str(existing)) == 3
+
+    def test_copy_file_dynamic_tier_overwrite_flag(self, tmp_path) -> None:
+        c = self._checker()
+        assert c.get_tier(
+            "windows-filesystem", "copy_file", destination="/nonexistent.txt", overwrite=True
+        ) == 3

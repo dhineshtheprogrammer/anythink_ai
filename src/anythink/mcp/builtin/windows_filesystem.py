@@ -246,9 +246,15 @@ class WindowsFilesystemServer(BuiltinMCPServer):
         if not _WINDOWS_ONLY:
             return _WIN_ERR
         if name == "list_dir":
-            return self._list_dir(str(arguments.get("path", ".")), bool(arguments.get("show_hidden", False)))
+            path = str(arguments.get("path", "")).strip()
+            if not path:
+                raise ValueError("path argument is required. Usage: /mcp call list_dir path=<directory>")
+            return self._list_dir(path, bool(arguments.get("show_hidden", False)))
         if name == "read_file":
-            return self._read_file(str(arguments.get("path", "")), str(arguments.get("encoding", "utf-8")))
+            path = str(arguments.get("path", "")).strip()
+            if not path:
+                raise ValueError("path argument is required. Usage: /mcp call read_file path=<file>")
+            return self._read_file(path, str(arguments.get("encoding", "utf-8")))
         if name == "get_file_metadata":
             return self._get_metadata(str(arguments.get("path", "")))
         if name == "search_files_by_name":
@@ -298,7 +304,7 @@ class WindowsFilesystemServer(BuiltinMCPServer):
         if not p.exists():
             raise FileNotFoundError(f"Path not found: {p}")
         if p.is_file():
-            return str(p)
+            raise NotADirectoryError(f"Not a directory: {p}. Use read_file to read a file.")
         entries = sorted(p.iterdir(), key=lambda e: (e.is_file(), e.name.lower()))
         if not show_hidden:
             entries = [e for e in entries if not e.name.startswith(".")]
