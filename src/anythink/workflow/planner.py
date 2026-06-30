@@ -267,6 +267,23 @@ def _parse_response(raw: str) -> WorkflowPlan | ClarificationRequest:
     try:
         data = json.loads(extracted)
     except json.JSONDecodeError as exc:
+        # "Unterminated string" / "Expecting value" at end-of-string both mean
+        # the model hit its max_tokens limit and the JSON was cut off.
+        truncated = any(
+            phrase in str(exc)
+            for phrase in ("Unterminated string", "Expecting value", "Expecting ',' delimiter",
+                           "Expecting property name")
+        ) and len(extracted) >= 200
+        if truncated:
+            raise WorkflowPlanError(
+                f"Planner response was truncated (JSON cut off mid-stream): {exc}\n"
+                f"Raw output ({len(raw)} chars): {raw[:500]}",
+                user_message=(
+                    "The planner model ran out of output tokens and its response was cut off. "
+                    "Try a model with a larger output capacity, e.g. "
+                    "/workflow run \"...\" --planner <bigger-alias>"
+                ),
+            ) from exc
         raise WorkflowPlanError(
             f"Planner returned non-JSON response: {exc}\nRaw output: {raw[:500]}",
             user_message="The planner model returned an invalid response. Try again.",
@@ -456,9 +473,10 @@ class WorkflowPlanner:
         api_key = self._key_manager.get_key(alias.provider)
         provider = self._provider_registry.instantiate(alias.provider, api_key=api_key)
 
-        # 1024 tokens is ample for a plan JSON; using 4096 previously pushed
-        # the combined input+output budget over Groq compound's per-request limit.
-        gen_params = GenerationParams(temperature=0.2, max_tokens=1024)
+        # 2048 tokens covers multi-stage plans even for small/local models that use
+        # more tokens per character than cloud models.  1024 was too low — plans
+        # with 2+ stages (e.g. USER_APPROVAL + MCP_CALL) routinely exceeded it.
+        gen_params = GenerationParams(temperature=0.2, max_tokens=2048)
 
         try:
             chunks: list[str] = []
@@ -467,8 +485,9 @@ class WorkflowPlanner:
                 model=alias.model_id,
                 gen_params=gen_params,
             ):
-                chunks.append(chunk.text)
-            raw_response = "".join(chunks)
+                if chunk.text:
+                    chunks.append(chunk.text)
+            raw_response = "".join(chunks).strip()
         except WorkflowPlanError:
             raise
         except Exception as exc:
@@ -479,6 +498,17 @@ class WorkflowPlanner:
                     f"The planner model ({alias.alias}) returned an error: {exc_detail}"
                 ),
             ) from exc
+
+        if not raw_response:
+            raise WorkflowPlanError(
+                f"Planner model '{alias.alias}' ({alias.provider}/{alias.model_id})"
+                " returned an empty response.",
+                user_message=(
+                    f"The planner model ({alias.alias}) returned no content. "
+                    "Possible causes: invalid API key, quota exceeded, or model unavailable. "
+                    "Try: /keys test  →  /workflow manifest refresh  →  retry."
+                ),
+            )
 
         return _parse_response(raw_response)
 

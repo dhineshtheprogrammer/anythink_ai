@@ -112,6 +112,27 @@ class TestParseResponse:
         with pytest.raises(WorkflowPlanError, match="non-JSON"):
             _parse_response("this is not json at all")
 
+    def test_truncated_json_raises_truncation_error(self) -> None:
+        # Simulate a realistic planner response cut off mid-string (max_tokens hit).
+        # Must be >=200 chars to pass the heuristic that distinguishes truncation
+        # from a genuinely malformed short string.
+        truncated = (
+            '{"clarification_needed": false, "name": "move-file",'
+            ' "trigger": "Move the file from source to destination",'
+            ' "stages": [{"id": "stage_1", "type": "USER_APPROVAL",'
+            ' "label": "Confirm file move operation", "model_alias": "",'
+            ' "task_instruction": "", "tool_name": "", "tool_params": {},'
+            ' "output_field": "approval", "input_refs": [], "approval_mess'
+        )
+        assert len(truncated) >= 200
+        with pytest.raises(WorkflowPlanError, match="truncated"):
+            _parse_response(truncated)
+
+    def test_short_invalid_json_not_flagged_as_truncated(self) -> None:
+        # A short malformed response is not truncation — it's just bad JSON
+        with pytest.raises(WorkflowPlanError, match="non-JSON"):
+            _parse_response("{bad json}")
+
     def test_empty_stages_raises(self) -> None:
         data = json.loads(_VALID_PLAN_JSON)
         data["stages"] = []
@@ -210,3 +231,17 @@ class TestWorkflowPlanner:
     def test_parse_plan_json_clarification_raises(self) -> None:
         with pytest.raises(WorkflowPlanError):
             WorkflowPlanner.parse_plan_json(_CLARIFICATION_JSON)
+
+    @pytest.mark.asyncio
+    async def test_empty_response_raises(self) -> None:
+        """Provider returning empty/whitespace-only text should give a clear error."""
+        planner, _ = _make_planner("")
+        with pytest.raises(WorkflowPlanError, match="empty response"):
+            await planner.plan("List files", planner_alias="local-planner")
+
+    @pytest.mark.asyncio
+    async def test_whitespace_only_response_raises(self) -> None:
+        """Whitespace-only response (e.g. trailing newline) should also raise cleanly."""
+        planner, _ = _make_planner("   \n  ")
+        with pytest.raises(WorkflowPlanError, match="empty response"):
+            await planner.plan("List files", planner_alias="local-planner")

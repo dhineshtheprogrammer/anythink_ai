@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from anythink.app.chat import ChatState
+from anythink.config.manager import Paths
 from anythink.config.schema import AppConfig
 from anythink.providers.base import (
     BaseProvider,
@@ -173,6 +174,84 @@ async def test_ai_response_creates_ai_bubble() -> None:
 
             conv = tapp.query_one(ConversationView)
             assert len(list(conv.query(AIBubble))) == 1
+
+
+@pytest.mark.asyncio
+async def test_pageup_scrolls_conversation_while_input_focused() -> None:
+    """PageUp/PageDown and Ctrl+Home/Ctrl+End should scroll the conversation
+    log even though keyboard focus always stays on the chat Input."""
+    ctx = _make_mock_ctx()
+    state = _make_echo_state()
+    tapp = AnythinkApp(ctx)  # type: ignore[arg-type]
+
+    with patch("anythink.app.chat.ChatApp._resolve_state", return_value=state):
+        async with tapp.run_test(headless=True) as pilot:
+            await pilot.press("enter")  # dismiss the session-naming prompt
+            await pilot.pause(0.1)
+
+            conv = tapp.query_one(ConversationView)
+            for i in range(60):
+                conv.add_bubble(SystemBubble(f"line {i}", ctx.theme))
+            await pilot.pause(0.1)
+
+            # New messages auto-scroll to the bottom.
+            assert conv.scroll_y > 0
+            bottom_y = conv.scroll_y
+
+            await pilot.press("ctrl+home")
+            await pilot.pause(0.2)
+            assert conv.scroll_y == 0
+
+            await pilot.press("pagedown")
+            await pilot.pause(0.2)
+            assert 0 < conv.scroll_y < bottom_y
+
+            await pilot.press("ctrl+end")
+            await pilot.pause(0.2)
+            assert conv.scroll_y == bottom_y
+
+            # The Input widget never loses focus throughout.
+            assert tapp.query_one(InputArea).query_one("Input").has_focus
+
+
+@pytest.mark.asyncio
+async def test_open_system_message_in_editor(xdg_dirs: Paths) -> None:
+    """Ctrl+G should write the latest (non-notice) SystemBubble's full text to
+    a file under the exports dir and hand it to the system editor."""
+    ctx = _make_mock_ctx()
+    ctx.paths = xdg_dirs
+    state = _make_echo_state()
+    tapp = AnythinkApp(ctx)  # type: ignore[arg-type]
+    long_output = "Running Processes (359 total)\n...full table..."
+
+    with patch("anythink.app.chat.ChatApp._resolve_state", return_value=state):
+        async with tapp.run_test(headless=True) as pilot:
+            await pilot.press("enter")  # dismiss the session-naming prompt
+            await pilot.pause(0.1)
+
+            conv = tapp.query_one(ConversationView)
+            conv.add_bubble(SystemBubble(long_output, ctx.theme))
+            await pilot.pause(0.1)
+
+            with patch("subprocess.Popen") as mock_popen:
+                await pilot.press("ctrl+g")
+                await pilot.pause(0.2)
+                assert mock_popen.called
+
+            written = list(xdg_dirs.exports_dir.glob("system_message_*.txt"))
+            assert len(written) == 1
+            assert written[0].read_text(encoding="utf-8") == long_output
+
+            # The confirmation bubble itself must not be picked up on a second press.
+            with patch("subprocess.Popen") as mock_popen2:
+                await pilot.press("ctrl+g")
+                await pilot.pause(0.2)
+                assert mock_popen2.called
+
+            written2 = sorted(xdg_dirs.exports_dir.glob("system_message_*.txt"))
+            assert len(written2) <= 2
+            for f in written2:
+                assert "Running Processes" in f.read_text(encoding="utf-8")
 
 
 @pytest.mark.asyncio

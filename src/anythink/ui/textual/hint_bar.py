@@ -8,9 +8,11 @@ from textual.widgets import Static
 from anythink.ui.theme import Theme
 
 _HINTS_DEFAULT = [
-    ("Ctrl+Y", "copy response"),
+    ("Click msg", "copy"),
+    ("Ctrl+Y", "copy last"),
     ("Ctrl+K", "copy code"),
-    ("Ctrl+O", "open in editor"),
+    ("Ctrl+G", "open sys msg"),
+    ("PgUp/PgDn", "scroll"),
     ("Esc", "stop"),
     ("/", "commands"),
 ]

@@ -65,11 +65,29 @@ class UserBubble(Static):
         self._created_at = datetime.now()
         self._theme = theme
         self._config = config
+        self._copied_flash = False
         super().__init__("")
 
     def on_mount(self) -> None:
         self._rebuild()
         self._apply_density()
+
+    def on_click(self, event: object) -> None:  # type: ignore[override]
+        """Copy this message to clipboard on click; stop propagation to keep input focus."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            import pyperclip
+
+            pyperclip.copy(self._text)
+            self._copied_flash = True
+            self._rebuild()
+            self.set_timer(1.5, self._clear_copy_flash)
+        event.stop()  # type: ignore[attr-defined]
+
+    def _clear_copy_flash(self) -> None:
+        self._copied_flash = False
+        self._rebuild()
 
     # ── public API ─────────────────────────────────────────────────────────────
 
@@ -115,11 +133,12 @@ class UserBubble(Static):
             lines.append(f"{icon} {name}")
         body = "\n".join(lines)
 
+        subtitle = "[b]✓ Copied![/b]" if self._copied_flash else f"[dim]{ts}[/dim]"
         return Panel(
             Text(body),
             title=title,
             title_align="left",
-            subtitle=f"[dim]{ts}[/dim]",
+            subtitle=subtitle,
             subtitle_align="right",
             border_style=t.primary,
             style=_surface_style(t),
@@ -132,7 +151,10 @@ class UserBubble(Static):
         header = Text()
         header.append("▎", style=t.primary)
         header.append(role, style=t.primary)
-        header.append(f"  {ts}", style=t.muted)
+        if self._copied_flash:
+            header.append("  ✓ Copied!", style="bold")
+        else:
+            header.append(f"  {ts}", style=t.muted)
 
         lines: list[str] = [f"  {self._text}"]
         for name in self._attachments:
@@ -182,11 +204,35 @@ class AIBubble(Static):
         self._debug_footer: str = ""
         self._smart_result: SmartResult | None = None
         self._smart_expanded: bool = False
+        self._copied_flash = False
         # Initial streaming placeholder
         super().__init__(Text("▍", style=theme.muted))
 
     def on_mount(self) -> None:
         self._apply_density()
+
+    def on_click(self, event: object) -> None:  # type: ignore[override]
+        """Copy this response to clipboard on click; stop propagation to keep input focus."""
+        import contextlib
+
+        if self._buffer:
+            with contextlib.suppress(Exception):
+                import pyperclip
+
+                pyperclip.copy(self._buffer)
+                self._copied_flash = True
+                body: RenderableType = (
+                    Markdown(self._buffer) if self._buffer.strip() else Text("")
+                )
+                self._redraw(body)
+                self.set_timer(1.5, self._clear_copy_flash)
+        event.stop()  # type: ignore[attr-defined]
+
+    def _clear_copy_flash(self) -> None:
+        self._copied_flash = False
+        if self._buffer:
+            body: RenderableType = Markdown(self._buffer) if self._buffer.strip() else Text("")
+            self._redraw(body)
 
     # ── streaming helpers ──────────────────────────────────────────────────────
 
@@ -373,6 +419,8 @@ class AIBubble(Static):
         return f"[b]{avatar}{self._model_alias}[/b]{star}"
 
     def _make_subtitle(self) -> str:
+        if self._copied_flash:
+            return "[b]✓ Copied![/b]"
         ts = format_timestamp(self._created_at, self._config)
         sub = f"[dim]{self._provider} · {ts}[/dim]"
         if self._length_suffix:
@@ -437,9 +485,12 @@ class AIBubble(Static):
         header = Text()
         header.append("▎", style=t.accent)
         header.append(f"{avatar_part}{self._model_alias}{star}", style=t.accent)
-        header.append(f"  {self._provider} · {ts}", style=t.muted)
-        if self._length_suffix:
-            header.append(f"  {self._length_suffix}", style=t.muted)
+        if self._copied_flash:
+            header.append("  ✓ Copied!", style="bold")
+        else:
+            header.append(f"  {self._provider} · {ts}", style=t.muted)
+            if self._length_suffix:
+                header.append(f"  {self._length_suffix}", style=t.muted)
 
         return Group(header, content)
 
@@ -510,15 +561,44 @@ class SystemBubble(Static):
         kind: str = "info",
         suggestion: str | None = None,
         config: AppConfig | None = None,
+        is_notice: bool = False,
     ) -> None:
         self._message = message
         self._kind = kind
         self._suggestion = suggestion
         self._theme = theme
         self._config = config
+        self._copied_flash = False
+        # Transient confirmation bubbles (e.g. "copied"/"opened") set this so
+        # features that look back over conversation history can skip them.
+        self.is_notice = is_notice
         super().__init__("")
 
     def on_mount(self) -> None:
+        self._rebuild()
+
+    @property
+    def full_text(self) -> str:
+        """The message plus suggestion (if any), exactly as copied/exported."""
+        if self._suggestion:
+            return f"{self._message}\n→ {self._suggestion}"
+        return self._message
+
+    def on_click(self, event: object) -> None:  # type: ignore[override]
+        """Copy this message to clipboard on click; stop propagation to keep input focus."""
+        import contextlib
+
+        with contextlib.suppress(Exception):
+            import pyperclip
+
+            pyperclip.copy(self.full_text)
+            self._copied_flash = True
+            self._rebuild()
+            self.set_timer(1.5, self._clear_copy_flash)
+        event.stop()  # type: ignore[attr-defined]
+
+    def _clear_copy_flash(self) -> None:
+        self._copied_flash = False
         self._rebuild()
 
     def refresh_visual(self, theme: Theme, config: AppConfig | None = None) -> None:
@@ -543,7 +623,8 @@ class SystemBubble(Static):
         if self._suggestion:
             body.append(f"\n   → {self._suggestion}", style=t.secondary)
 
-        self.update(Panel(body, border_style=t.muted, style=_surface_style(t)))
+        subtitle = "[b]✓ Copied![/b]" if self._copied_flash else None
+        self.update(Panel(body, border_style=t.muted, style=_surface_style(t), subtitle=subtitle))
 
 
 # ── CompactNotice ──────────────────────────────────────────────────────────────

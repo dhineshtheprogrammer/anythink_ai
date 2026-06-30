@@ -92,6 +92,11 @@ class AnythinkApp(App[int]):
         Binding("ctrl+y", "copy_response", "Copy response", show=False),
         Binding("ctrl+k", "copy_last_code", "Copy code", show=False),
         Binding("ctrl+o", "open_in_editor", "Open in editor", show=False),
+        Binding("ctrl+g", "open_system_message_in_editor", "Open system msg", show=False),
+        Binding("pageup", "scroll_conversation_up", "Scroll up", show=False),
+        Binding("pagedown", "scroll_conversation_down", "Scroll down", show=False),
+        Binding("ctrl+home", "scroll_conversation_top", "Scroll to top", show=False),
+        Binding("ctrl+end", "scroll_conversation_bottom", "Scroll to bottom", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -690,6 +695,22 @@ class AnythinkApp(App[int]):
         # Fallback: restore focus to the chat input
         self.query_one(Input).focus()
 
+    def action_scroll_conversation_up(self) -> None:
+        """PageUp: scroll the conversation view up by one page, even while the input is focused."""
+        self.query_one(ConversationView).scroll_page_up()
+
+    def action_scroll_conversation_down(self) -> None:
+        """PageDown: scroll the conversation view down by one page."""
+        self.query_one(ConversationView).scroll_page_down()
+
+    def action_scroll_conversation_top(self) -> None:
+        """Ctrl+Home: jump to the start of the conversation."""
+        self.query_one(ConversationView).scroll_home()
+
+    def action_scroll_conversation_bottom(self) -> None:
+        """Ctrl+End: jump back down to the latest message."""
+        self.query_one(ConversationView).scroll_end(animate=False)
+
     def action_copy_response(self) -> None:
         """Ctrl+Y: copy the last AI response to the system clipboard."""
         import contextlib
@@ -761,6 +782,46 @@ class AnythinkApp(App[int]):
             conv.add_bubble(SystemBubble("Session file opened in editor.", t, kind="success"))
         except Exception as exc:
             conv.add_bubble(SystemBubble(f"Could not open editor: {exc}", t, kind="error"))
+
+    def action_open_system_message_in_editor(self) -> None:
+        """Ctrl+G: write the most recent system message to a file and open it in the
+        system text editor — useful when long output (e.g. workflow results) doesn't
+        fit comfortably in the conversation panel."""
+        import subprocess  # nosec B404
+        import sys
+        from datetime import datetime
+
+        conv = self.query_one(ConversationView)
+        t = self._ctx.theme
+        bubbles = [b for b in conv.query(SystemBubble) if not b.is_notice]
+        if not bubbles:
+            conv.add_bubble(
+                SystemBubble("No system message to open yet.", t, kind="info", is_notice=True)
+            )
+            return
+        text = bubbles[-1].full_text
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        out_dir = self._ctx.paths.exports_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"system_message_{ts}.txt"
+        try:
+            path.write_text(text, encoding="utf-8")
+            if sys.platform == "win32":
+                subprocess.Popen(["notepad.exe", str(path)])  # nosec B603, B607
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", str(path)])  # nosec B603, B607
+            else:
+                subprocess.Popen(["xdg-open", str(path)])  # nosec B603, B607
+            conv.add_bubble(
+                SystemBubble(
+                    "✓ Opened last system message in editor.", t, kind="success", is_notice=True
+                )
+            )
+        except Exception as exc:
+            conv.add_bubble(
+                SystemBubble(f"Could not open editor: {exc}", t, kind="error", is_notice=True)
+            )
 
     def on_settings_menu_changed(self, event: SettingsMenu.Changed) -> None:
         """Sync runtime state immediately when a config value is saved from settings."""
@@ -3621,7 +3682,7 @@ class AnythinkApp(App[int]):
         kind = "success" if status == "completed" else "error"
         conv.add_bubble(
             SystemBubble(
-                f"Workflow '{plan.name}' {status}.\n{final_out[:200]}",
+                f"Workflow '{plan.name}' {status}.\n{final_out}",
                 t,
                 kind=kind,
             )
