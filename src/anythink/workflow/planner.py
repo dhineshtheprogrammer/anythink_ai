@@ -198,7 +198,67 @@ def _repair_plan_data(data: dict[str, Any]) -> dict[str, Any]:
         repaired.append(stage)
 
     data["stages"] = repaired
+    data["stages"] = _drop_spurious_loops(data["stages"])
     return data
+
+
+def _has_item_ref(stage: dict[str, Any]) -> bool:
+    """Return True if any string field in *stage* contains an unresolvable ``{{item}}`` ref.
+
+    Stages with ``{{item}}`` in their params are loop sub-stages that the model
+    accidentally placed at the top level. They cannot run correctly there.
+    """
+    def _check(val: Any) -> bool:
+        if isinstance(val, str):
+            return "{{item}}" in val or "{{loop." in val
+        if isinstance(val, dict):
+            return any(_check(v) for v in val.values())
+        if isinstance(val, list):
+            return any(_check(v) for v in val)
+        return False
+
+    return any(_check(v) for v in stage.values())
+
+
+def _drop_spurious_loops(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove LOOP stages that immediately follow an MCP_CALL.
+
+    Small models produce this pattern when asked to "list files" — they wrap a
+    directory-listing string inside a LOOP, which is always wrong because
+    ``list_dir`` returns a formatted text block, not a Python list.
+
+    Also drops any top-level stages that contain ``{{item}}`` — these are loop
+    sub-stages the model accidentally placed outside the LOOP and they can never
+    run correctly at the top level.
+    """
+    if len(stages) < 2:
+        return stages
+
+    filtered: list[dict[str, Any]] = []
+    prev_was_mcp = False
+
+    for stage in stages:
+        stype = str(stage.get("type") or stage.get("stage_type") or "").upper()
+
+        if stype in {"MCP_CALL", "MCP"}:
+            filtered.append(stage)
+            prev_was_mcp = True
+            continue
+
+        if stype == "LOOP" and prev_was_mcp:
+            # A LOOP immediately after an MCP_CALL is almost always a small-model
+            # mistake for retrieval tasks (list_dir, read_file, API calls).
+            # Drop the whole LOOP and its sub-stages — they use {{item}} which
+            # is only meaningful inside a running loop executor, not at top level.
+            prev_was_mcp = False
+            continue
+
+        prev_was_mcp = False
+        filtered.append(stage)
+
+    # Additionally remove any top-level stage that references {{item}} or
+    # {{loop.*}} — these are displaced loop sub-stages and will always fail.
+    return [s for s in filtered if not _has_item_ref(s)]
 
 
 def _parse_response(raw: str) -> WorkflowPlan | ClarificationRequest:

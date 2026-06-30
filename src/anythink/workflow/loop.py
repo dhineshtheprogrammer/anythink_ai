@@ -62,9 +62,11 @@ class LoopExecutor:
             if state.stop_requested:
                 break
 
-            # Expose the current loop item to downstream refs
+            # Expose the current loop item to downstream refs.
+            # "item" lets sub-stages use {{item}} in tool_params / task_instruction.
             state.accumulated_results["loop.current_item"] = item
             state.accumulated_results["loop.current_index"] = idx
+            state.accumulated_results["item"] = item
 
             iteration_error: str | None = None
 

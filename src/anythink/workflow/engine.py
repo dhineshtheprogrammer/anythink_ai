@@ -228,9 +228,18 @@ class WorkflowEngine:
         return group, j
 
     def _build_final_output(self, state: WorkflowState) -> str:
-        """Return the last stage's raw content as the workflow's final output."""
+        """Return the last successful stage's content as the workflow's final output.
+
+        Prefers the last stage that produced content without an error so that a
+        failing clean-up stage at the end doesn't erase good results from earlier.
+        """
         if not state.completed_stages:
             return "(no output)"
+        # Walk backwards to find the last stage with real content and no error.
+        for result in reversed(state.completed_stages):
+            if not result.error and not result.skipped and result.raw_content:
+                return result.raw_content
+        # Fallback: last stage, content or dict repr.
         last = state.completed_stages[-1]
         return last.raw_content or str(last.output) or "(no output)"
 
