@@ -314,6 +314,7 @@ class AppContext:
             model_registry=model_registry,
             key_manager=key_manager,
             provider_registry=provider_registry,
+            workflow_registry=workflow_registry,
         )
         workflow_router = MetaRouter(
             workflow_registry=workflow_registry,

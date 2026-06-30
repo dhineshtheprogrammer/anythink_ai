@@ -122,9 +122,25 @@ class MCPManager:
     # ── dispatch ───────────────────────────────────────────────────────────────
 
     async def call_tool(self, tool_name: str, arguments: dict[str, Any]) -> MCPCallResult:
-        """Route *tool_name* to the right server and return its result."""
+        """Route *tool_name* to the right server and return its result.
+
+        Accepts both simple names (``list_dir``) and fully-qualified names
+        (``filesystem.list_dir``) — the planner always emits the qualified form.
+        """
         t0 = time.monotonic()
+
+        # Direct lookup (simple name already in index).
+        dispatch_name = tool_name
         server_name = self._tool_index.get(tool_name)
+
+        # Qualified "server.tool" lookup — strip the server prefix and retry.
+        if server_name is None and "." in tool_name:
+            prefix, simple = tool_name.split(".", 1)
+            if prefix in self._builtins or prefix in self._externals:
+                server_name = self._tool_index.get(simple)
+                if server_name is not None:
+                    dispatch_name = simple  # servers expect the simple name
+
         if server_name is None:
             return MCPCallResult(
                 tool_name=tool_name,
@@ -135,10 +151,10 @@ class MCPManager:
             )
 
         if server_name in self._builtins:
-            return await self._builtins[server_name].call_tool(tool_name, arguments)
+            return await self._builtins[server_name].call_tool(dispatch_name, arguments)
 
         if server_name in self._externals:
-            return await self._externals[server_name].call_tool(tool_name, arguments)
+            return await self._externals[server_name].call_tool(dispatch_name, arguments)
 
         return MCPCallResult(
             tool_name=tool_name,

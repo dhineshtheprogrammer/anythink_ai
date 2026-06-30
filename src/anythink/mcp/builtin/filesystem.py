@@ -22,20 +22,29 @@ class FilesystemServer(BuiltinMCPServer):
         return [
             MCPTool(
                 name="list_dir",
-                description="List files and directories at the given path.",
-                input_schema={"path": {"type": "string", "description": "Directory path"}},
+                description="List files and directories at the given path. Returns one entry per line prefixed with [D] for directory or [F] for file.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute directory path to list"},
+                    },
+                    "required": ["path"],
+                },
                 server_name=self.name,
             ),
             MCPTool(
                 name="read_file",
                 description="Read a text file and return its content.",
                 input_schema={
-                    "path": {"type": "string", "description": "File path"},
-                    "max_chars": {
-                        "type": "integer",
-                        "description": "Maximum characters to return",
-                        "default": _MAX_READ_CHARS,
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Absolute file path to read"},
+                        "max_chars": {
+                            "type": "integer",
+                            "description": "Maximum characters to return",
+                        },
                     },
+                    "required": ["path"],
                 },
                 server_name=self.name,
             ),

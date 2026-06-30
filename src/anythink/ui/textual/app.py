@@ -3498,7 +3498,8 @@ class AnythinkApp(App[int]):
                     return
                 plan = raw
             except Exception as exc:  # noqa: BLE001
-                conv.add_bubble(SystemBubble(f"Planner error: {exc}", t, kind="error"))
+                exc_text = str(exc) or f"{type(exc).__name__}: {repr(exc)}"
+                conv.add_bubble(SystemBubble(f"Planner error: {exc_text}", t, kind="error"))
                 return
         else:
             conv.add_bubble(

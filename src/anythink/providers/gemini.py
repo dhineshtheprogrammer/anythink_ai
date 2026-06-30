@@ -156,13 +156,14 @@ class GeminiProvider(BaseProvider):
             ) from e
         except Exception as e:
             err_str = str(e).lower()
+            msg = str(e) or repr(e)
             if "api key" in err_str or "unauthenticated" in err_str:
-                raise AuthenticationError(str(e), provider=self.name) from e
+                raise AuthenticationError(msg, provider=self.name) from e
             if "quota" in err_str or "rate" in err_str:
-                raise RateLimitError(str(e), provider=self.name) from e
+                raise RateLimitError(msg, provider=self.name) from e
             if "not found" in err_str or "does not exist" in err_str:
-                raise ModelNotFoundError(str(e), provider=self.name) from e
-            raise ProviderUnavailableError(str(e), provider=self.name) from e
+                raise ModelNotFoundError(msg, provider=self.name) from e
+            raise ProviderUnavailableError(msg, provider=self.name) from e
 
     async def list_models(self) -> list[ModelInfo]:
         try:

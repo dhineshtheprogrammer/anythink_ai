@@ -35,9 +35,26 @@ async def execute(
             error="LOOP stage is missing loop_def.",
         )
 
-    collection = state.resolve_ref(stage.loop_def.input_collection_ref)
+    ref = stage.loop_def.input_collection_ref
+    collection = state.resolve_ref(ref)
+    if collection is None:
+        # The ref didn't match any prior stage output — surface a clear error
+        # instead of silently iterating over an empty list.
+        known = list(state.accumulated_results.keys())
+        return StageResult(
+            stage_id=stage.id,
+            stage_type=StageType.LOOP,
+            output={},
+            raw_content="",
+            duration_s=time.monotonic() - start,
+            error=(
+                f"LOOP collection ref '{ref}' did not resolve to any prior stage output. "
+                f"Available refs: {known or ['(none — no prior stages ran)']}"
+            ),
+        )
+
     if not isinstance(collection, list):
-        collection = [collection] if collection is not None else []
+        collection = [collection]
 
     async def _run_sub_stage(
         sub_stage: Stage,

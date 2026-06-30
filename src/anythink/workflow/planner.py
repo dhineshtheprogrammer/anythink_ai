@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from anythink.keys.manager import KeyManager
     from anythink.providers.registry import ProviderRegistry
     from anythink.workflow.manifest import CapabilityManifest
+    from anythink.workflow.registry import WorkflowCapabilityRegistry
 
 # ---------------------------------------------------------------------------
 # System prompt template
@@ -36,8 +37,12 @@ RULES:
 - Assign the most appropriate model alias to every LLM_SPECIALIST stage based
   on its capability tags.
 - Insert a USER_APPROVAL stage before ANY destructive MCP tool call.
-- Use a LOOP stage when the task involves processing each item in a collection
-  individually (e.g., each email, each file).
+- To fetch or retrieve data (list files, read a file, call an API) use MCP_CALL.
+  MCP_CALL is a single tool call — do NOT wrap it in a LOOP.
+- Use a LOOP stage ONLY when you must run sub-stages once per item in a
+  collection that was already fetched by a prior MCP_CALL or LLM_SPECIALIST
+  stage. A LOOP stage must always follow a stage that produces the collection.
+  A LOOP stage by itself with no prior stage is always wrong.
 - Use parallel branches when sub-tasks are independent of each other.
 - If the task is ambiguous in a way that would produce significantly different
   plans, output a clarification request instead of a plan.
@@ -45,30 +50,39 @@ RULES:
 """
 
 _OUTPUT_SCHEMA = """\
-OUTPUT FORMAT — respond with ONLY valid JSON in one of these two shapes:
+OUTPUT FORMAT — respond with ONLY valid JSON, no markdown, no code fences.
 
-Shape 1 — Clarification needed:
+The "type" field of every stage MUST be exactly one of these seven strings:
+  PLANNER
+  MCP_CALL
+  LLM_SPECIALIST
+  USER_APPROVAL
+  CONDITION
+  FORMATTER
+  LOOP
+
+Shape 1 — when the task is ambiguous, return this:
 {
   "clarification_needed": true,
   "questions": ["Question 1?", "Question 2?"]
 }
 
-Shape 2 — Full plan:
+Shape 2 — when you can produce a full plan, return this:
 {
   "clarification_needed": false,
   "name": "short-workflow-name",
-  "trigger": "<original task>",
+  "trigger": "<original task text>",
   "stages": [
     {
       "id": "stage_1",
-      "type": "MCP_CALL|LLM_SPECIALIST|USER_APPROVAL|CONDITION|FORMATTER|LOOP",
+      "type": "LLM_SPECIALIST",
       "label": "Human-readable label",
       "model_alias": "",
       "task_instruction": "",
-      "tool_name": "server.tool_name",
+      "tool_name": "",
       "tool_params": {},
-      "output_field": "field_name",
-      "input_refs": ["stage_N.field"],
+      "output_field": "result",
+      "input_refs": [],
       "expected_format": "",
       "condition_expr": "",
       "branch_a": [],
@@ -79,21 +93,36 @@ Shape 2 — Full plan:
       "is_parallel": false
     }
   ],
-  "models_used": ["alias1"],
-  "mcp_servers_used": ["server1"],
+  "models_used": [],
+  "mcp_servers_used": [],
   "estimated_duration_s": null,
   "estimated_loop_iterations": null
 }
 
-For LOOP stages, set loop_def to:
-{
-  "input_collection_ref": "stage_N.field_name",
-  "sub_stages": [ <same stage objects> ],
-  "accumulation_strategy": "append"
-}
+STAGE TYPE DETAILS:
 
-Omit irrelevant fields by setting them to empty string, empty list, or null.
-Respond with ONLY the JSON — no explanation, no markdown, no code fences.
+MCP_CALL — calls one MCP tool. Example that lists a directory:
+  {"id": "stage_1", "type": "MCP_CALL", "label": "List files", "tool_name": "filesystem.list_dir",
+   "tool_params": {"path": "/some/path"}, "output_field": "file_list", "input_refs": [],
+   "model_alias": "", "task_instruction": "", "expected_format": "", "condition_expr": "",
+   "branch_a": [], "branch_b": [], "loop_def": null, "approval_message": "",
+   "is_destructive": false, "is_parallel": false}
+
+LLM_SPECIALIST — sends text to a model. Fill model_alias and task_instruction.
+  Use input_refs to reference prior stage outputs, e.g. ["stage_1.file_list"].
+
+LOOP — runs sub_stages once per item in a prior stage's output collection.
+  loop_def: {"input_collection_ref": "stage_1.file_list", "sub_stages": [...], "accumulation_strategy": "append"}
+  WARNING: LOOP requires input_collection_ref to reference a prior stage output field.
+  Never use LOOP as the first stage. Never use LOOP just to retrieve data.
+
+CONDITION — evaluates condition_expr (e.g. "stage_1.count > 0") and runs branch_a (true) or branch_b (false).
+USER_APPROVAL — pauses for user confirmation. Fill approval_message.
+FORMATTER — converts content to a format. Fill expected_format: markdown, plain_text, json, csv, html, numbered_list.
+
+Set unused fields to empty string "", empty list [], or null.
+
+Set unused fields to empty string "", empty list [], or null.
 """
 
 
@@ -132,6 +161,46 @@ def _extract_json(text: str) -> str:
     return text[start:].strip()
 
 
+def _repair_plan_data(data: dict[str, Any]) -> dict[str, Any]:
+    """Normalise a raw planner dict so that from_dict() can always succeed.
+
+    Small models frequently omit or rename required fields.  This function
+    patches the dict in-place (on a shallow copy) rather than relying on every
+    from_dict path to handle every possible omission.
+    """
+    data = dict(data)
+
+    # Top-level required fields
+    if not data.get("name"):
+        data["name"] = "unnamed-workflow"
+    if not data.get("trigger"):
+        data["trigger"] = ""
+
+    # Stages must be a list of dicts
+    raw_stages = data.get("stages") or data.get("pipeline") or data.get("steps") or []
+    if not isinstance(raw_stages, list):
+        raw_stages = []
+
+    repaired: list[dict[str, Any]] = []
+    for i, stage in enumerate(raw_stages):
+        if not isinstance(stage, dict):
+            continue
+        stage = dict(stage)
+        # id — most common omission
+        if not stage.get("id") and not stage.get("stage_id"):
+            stage["id"] = f"stage_{i + 1}"
+        # type — default to LLM_SPECIALIST when absent
+        if not stage.get("type") and not stage.get("stage_type"):
+            stage["type"] = "LLM_SPECIALIST"
+        # tool_params must be a dict
+        if not isinstance(stage.get("tool_params"), dict):
+            stage["tool_params"] = {}
+        repaired.append(stage)
+
+    data["stages"] = repaired
+    return data
+
+
 def _parse_response(raw: str) -> WorkflowPlan | ClarificationRequest:
     """Parse the planner's JSON response into a plan or clarification request."""
     extracted = _extract_json(raw)
@@ -154,6 +223,8 @@ def _parse_response(raw: str) -> WorkflowPlan | ClarificationRequest:
         if not isinstance(questions, list):
             questions = [str(questions)]
         return ClarificationRequest(questions=[str(q) for q in questions])
+
+    data = _repair_plan_data(data)
 
     # Build WorkflowPlan — use from_dict for consistency with the model
     try:
@@ -186,17 +257,28 @@ class WorkflowPlanner:
     its output is always a structured plan or a clarification request.
     """
 
+    # Tags that indicate a model is suitable for planning tasks
+    _PLANNER_TAGS: frozenset[str] = frozenset(["planning", "reasoning"])
+
+    # Providers that run locally — avoid when possible to save API quota,
+    # but they're fine as planners if that's all that's configured
+    _LOCAL_PROVIDERS: frozenset[str] = frozenset(
+        ["ollama", "lm_studio", "llamacpp", "lmstudio", "localai"]
+    )
+
     def __init__(
         self,
         manifest: CapabilityManifest,
         model_registry: ModelRegistry,
         key_manager: KeyManager,
         provider_registry: ProviderRegistry,
+        workflow_registry: WorkflowCapabilityRegistry | None = None,
     ) -> None:
         self._manifest = manifest
         self._model_registry = model_registry
         self._key_manager = key_manager
         self._provider_registry = provider_registry
+        self._workflow_registry = workflow_registry
 
     # ------------------------------------------------------------------
     # Public API
@@ -250,7 +332,38 @@ class WorkflowPlanner:
                     "No models are configured. Add one with /model add, then retry."
                 ),
             )
+
+        def _tagged(aliases: list[ModelAlias]) -> list[ModelAlias]:
+            if self._workflow_registry is None:
+                return []
+            return [
+                a for a in aliases
+                if self._PLANNER_TAGS & set(self._workflow_registry.get_tags(a.alias))
+            ]
+
+        local = [a for a in all_aliases if a.provider.lower() in self._LOCAL_PROVIDERS]
+        cloud = [a for a in all_aliases if a.provider.lower() not in self._LOCAL_PROVIDERS]
+
+        # 1. Local alias explicitly tagged for planning/reasoning — best choice.
+        local_tagged = _tagged(local)
+        if local_tagged:
+            return local_tagged[0]
+
+        # 2. Any local provider — avoids cloud API keys and quota limits.
+        if local:
+            return local[0]
+
+        # 3. Cloud alias tagged for planning/reasoning — user configured it intentionally.
+        cloud_tagged = _tagged(cloud)
+        if cloud_tagged:
+            return cloud_tagged[0]
+
+        # 4. First alias regardless of provider.
         return all_aliases[0]
+
+    # Rough character budget: most providers allow ~800k chars of input;
+    # keeping the full prompt under this leaves room for the user's task.
+    _MAX_PROMPT_CHARS: int = 60_000
 
     async def _call_planner(
         self,
@@ -260,6 +373,16 @@ class WorkflowPlanner:
     ) -> WorkflowPlan | ClarificationRequest:
         manifest_text = self._manifest.load() or "(manifest not yet generated)"
         system_prompt = _build_system_prompt(manifest_text)
+
+        if len(system_prompt) > self._MAX_PROMPT_CHARS:
+            raise WorkflowPlanError(
+                f"Planner system prompt is {len(system_prompt):,} chars "
+                f"(limit {self._MAX_PROMPT_CHARS:,}). Run /workflow manifest refresh to rebuild.",
+                user_message=(
+                    "The capability manifest is too large for the planner model. "
+                    "Run /workflow manifest refresh to rebuild a smaller version."
+                ),
+            )
 
         user_content = f"Task: {task}"
         if extra_context:
@@ -273,17 +396,30 @@ class WorkflowPlanner:
         api_key = self._key_manager.get_key(alias.provider)
         provider = self._provider_registry.instantiate(alias.provider, api_key=api_key)
 
-        gen_params = GenerationParams(temperature=0.2, max_tokens=4096)
+        # 1024 tokens is ample for a plan JSON; using 4096 previously pushed
+        # the combined input+output budget over Groq compound's per-request limit.
+        gen_params = GenerationParams(temperature=0.2, max_tokens=1024)
 
-        chunks: list[str] = []
-        async for chunk in provider.stream_chat(
-            messages=messages,
-            model=alias.model_id,
-            gen_params=gen_params,
-        ):
-            chunks.append(chunk.text)
+        try:
+            chunks: list[str] = []
+            async for chunk in provider.stream_chat(
+                messages=messages,
+                model=alias.model_id,
+                gen_params=gen_params,
+            ):
+                chunks.append(chunk.text)
+            raw_response = "".join(chunks)
+        except WorkflowPlanError:
+            raise
+        except Exception as exc:
+            exc_detail = str(exc) or repr(exc)
+            raise WorkflowPlanError(
+                f"Provider '{alias.provider}' failed during planning: {exc_detail}",
+                user_message=(
+                    f"The planner model ({alias.alias}) returned an error: {exc_detail}"
+                ),
+            ) from exc
 
-        raw_response = "".join(chunks)
         return _parse_response(raw_response)
 
     # ------------------------------------------------------------------

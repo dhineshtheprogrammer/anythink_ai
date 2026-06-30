@@ -7,6 +7,16 @@ from typing import TYPE_CHECKING, Any
 
 from anythink.workflow.models import StageType
 
+# Hard cap on total manifest size sent to the planner.
+# Most APIs (Anthropic, OpenAI) reject requests over ~200k tokens; keeping the
+# manifest under this character count leaves plenty of room for the system
+# prompt wrapper and the user's task string.
+_MAX_MANIFEST_CHARS: int = 12_000
+
+# Per-tool limits to keep the MCP section compact.
+_MAX_TOOL_DESC_CHARS: int = 100
+_MAX_TOOLS_PER_SERVER: int = 15
+
 if TYPE_CHECKING:
     from anythink.config.models import ModelRegistry
     from anythink.mcp.manager import MCPManager
@@ -65,7 +75,8 @@ class CapabilityManifest:
         sections.append(self._section_stage_types())
         sections.append(self._section_saved_workflows(workflow_storage))
 
-        return "\n".join(sections)
+        text = "\n".join(sections)
+        return self._truncate(text)
 
     def refresh(
         self,
@@ -141,26 +152,47 @@ class CapabilityManifest:
 
         for server_name in sorted(by_server):
             server_tools = by_server[server_name]
+            total = len(server_tools)
+            shown = server_tools[:_MAX_TOOLS_PER_SERVER]
             lines.append(f"server: {server_name}")
-            for tool in server_tools:
+            for tool in shown:
                 lines.append(f"  tool: {tool.name}")
-                lines.append(f"    description: {tool.description}")
-                # Extract params from input_schema
+                desc = tool.description or ""
+                if len(desc) > _MAX_TOOL_DESC_CHARS:
+                    desc = desc[:_MAX_TOOL_DESC_CHARS] + "…"
+                lines.append(f"    description: {desc}")
                 params = self._extract_params(tool.input_schema)
                 if params:
                     lines.append(f"    params: {params}")
                 if _is_destructive(tool.name):
                     lines.append("    DESTRUCTIVE: requires user confirmation")
+            if total > _MAX_TOOLS_PER_SERVER:
+                omitted = total - _MAX_TOOLS_PER_SERVER
+                lines.append(f"  … and {omitted} more tools (omitted to reduce prompt size)")
             lines.append("")
 
         return "\n".join(lines)
 
     def _extract_params(self, schema: dict[str, Any]) -> str:
-        """Return a compact param list string from a JSON Schema dict."""
+        """Return a compact param list string from a JSON Schema dict.
+
+        Handles both proper JSON Schema (``{"properties": {...}}`` wrapper)
+        and the flat format some builtin servers use (``{"param": {"type": ...}}``).
+        """
+        # Standard JSON Schema format
         props = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        # Flat format fallback: every key whose value is a dict with a "type" key
+        if not props:
+            props = {
+                k: v for k, v in schema.items()
+                if isinstance(v, dict) and "type" in v and k not in ("type", "required")
+            }
+
         if not props:
             return ""
-        required = set(schema.get("required", []))
+
         parts: list[str] = []
         for name, spec in props.items():
             ptype = spec.get("type", "any")
@@ -210,3 +242,16 @@ class CapabilityManifest:
                 lines.append(f"  stage_count: {s.get('stage_count', 0)}")
                 lines.append("")
         return "\n".join(lines)
+
+    def _truncate(self, text: str) -> str:
+        """Hard-cap the manifest at _MAX_MANIFEST_CHARS to avoid 413 errors."""
+        if len(text) <= _MAX_MANIFEST_CHARS:
+            return text
+        cutoff = text.rfind("\n", 0, _MAX_MANIFEST_CHARS)
+        if cutoff == -1:
+            cutoff = _MAX_MANIFEST_CHARS
+        omitted = len(text) - cutoff
+        return (
+            text[:cutoff]
+            + f"\n\n[Manifest truncated — {omitted} chars omitted to stay within prompt size limits]"
+        )

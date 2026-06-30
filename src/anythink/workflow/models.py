@@ -25,6 +25,57 @@ class StageType(str, Enum):
     LOOP = "LOOP"
 
 
+# Aliases for common model-output variants of stage type names.
+# Small models may drop underscores, abbreviate, or output the pipe-separated
+# schema hint as a literal value — these mappings handle all observed cases.
+_STAGE_TYPE_ALIASES: dict[str, str] = {
+    "MCP": "MCP_CALL",
+    "MCP CALL": "MCP_CALL",
+    "LLM": "LLM_SPECIALIST",
+    "LLM SPECIALIST": "LLM_SPECIALIST",
+    "LLMSPECIALIST": "LLM_SPECIALIST",
+    "SPECIALIST": "LLM_SPECIALIST",
+    "USER": "USER_APPROVAL",
+    "USER APPROVAL": "USER_APPROVAL",
+    "USERAPPROVAL": "USER_APPROVAL",
+    "APPROVAL": "USER_APPROVAL",
+    "COND": "CONDITION",
+    "FORMAT": "FORMATTER",
+    "PLAN": "PLANNER",
+}
+
+_VALID_STAGE_TYPES: frozenset[str] = frozenset(t.value for t in StageType)
+
+
+def _normalize_stage_type(raw: str) -> str:
+    """Coerce a model-generated type string to a canonical StageType value.
+
+    Handles: pipe-separated schema hints, missing underscores, abbreviations,
+    and mixed case — all produced by small local models that misread the schema.
+    """
+    # If the model output the whole pipe-separated enum hint, take the first token
+    if "|" in raw:
+        raw = raw.split("|")[0]
+
+    normalized = raw.strip().upper().replace(" ", "_").replace("-", "_")
+
+    if normalized in _VALID_STAGE_TYPES:
+        return normalized
+
+    # Try alias table (before and after underscore normalisation)
+    raw_upper = raw.strip().upper()
+    for variant in (raw_upper, raw_upper.replace("_", " ")):
+        if variant in _STAGE_TYPE_ALIASES:
+            return _STAGE_TYPE_ALIASES[variant]
+
+    # Prefix match as last resort (e.g. "MCP_CALL_SOMETHING" → "MCP_CALL")
+    for valid in _VALID_STAGE_TYPES:
+        if normalized.startswith(valid):
+            return valid
+
+    return normalized  # Return as-is; StageType() will raise a clear ValueError
+
+
 class AccumulationStrategy(str, Enum):
     APPEND = "append"
     MERGE = "merge"
@@ -163,11 +214,13 @@ class Stage:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Stage:
+    def from_dict(cls, data: dict[str, Any], _index: int = 0) -> Stage:
         loop_raw = data.get("loop_def")
+        raw_id = data.get("id") or data.get("stage_id") or f"stage_{_index + 1}"
+        raw_type = data.get("type") or data.get("stage_type") or "LLM_SPECIALIST"
         return cls(
-            id=data["id"],
-            type=StageType(data["type"]),
+            id=str(raw_id),
+            type=StageType(_normalize_stage_type(str(raw_type))),
             label=data.get("label", ""),
             model_alias=data.get("model_alias", ""),
             task_instruction=data.get("task_instruction", ""),
@@ -220,10 +273,11 @@ class WorkflowPlan:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkflowPlan:
+        raw_name = data.get("name") or data.get("workflow_name") or "unnamed-workflow"
         return cls(
-            name=data["name"],
+            name=str(raw_name),
             trigger=data.get("trigger", ""),
-            stages=[Stage.from_dict(s) for s in data.get("stages", [])],
+            stages=[Stage.from_dict(s, i) for i, s in enumerate(data.get("stages", []))],
             models_used=data.get("models_used", []),
             mcp_servers_used=data.get("mcp_servers_used", []),
             estimated_duration_s=data.get("estimated_duration_s"),
